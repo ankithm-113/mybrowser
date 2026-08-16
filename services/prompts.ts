@@ -61,8 +61,14 @@ function renderElement(el: AgentElement): string {
   return bits.join(' ');
 }
 
-const MAX_PAGE_TEXT = 3500;
-const MAX_ELEMENTS_IN_PROMPT = 140;
+/**
+ * Budgets are tuned against the tightest free tier in the chain: Groq allows
+ * 12k tokens per minute, so a ~3.3k-token turn rate-limits after three steps.
+ * Holding a turn near ~1.5k tokens roughly doubles the agent steps available
+ * per minute, at the cost of seeing less of very long pages.
+ */
+const MAX_PAGE_TEXT = 2000;
+const MAX_ELEMENTS_IN_PROMPT = 80;
 
 export function renderSnapshot(snapshot: PageSnapshot): string {
   const sorted = [...snapshot.elements].sort(

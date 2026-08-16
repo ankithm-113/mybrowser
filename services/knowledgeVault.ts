@@ -182,7 +182,8 @@ export function blankProject(): ProjectEntry {
 
 /* ------------------------------- LLM context ------------------------------ */
 
-const RESUME_TEXT_BUDGET = 6000;
+/** Trimmed to help a turn fit inside Groq's 12k tokens-per-minute free tier. */
+const RESUME_TEXT_BUDGET = 3000;
 
 /**
  * The single source of truth the agent sees about the user. Kept terse — this

@@ -1,15 +1,17 @@
-import React, { useEffect, useRef } from 'react';
-import { Platform, StyleSheet, View } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { Animated, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import * as Notifications from 'expo-notifications';
 import { NavigationContainer, DefaultTheme } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 
+import AgentSheet from '@/components/AgentSheet';
 import DialogHost from '@/components/DialogHost';
 import Glass from '@/components/Glass';
 import Icon, { IconName } from '@/components/Icon';
 import {
+  FLOATING_BAR_BOTTOM,
   FLOATING_BAR_HEIGHT,
   FLOATING_BAR_MARGIN,
   FLOATING_BAR_RADIUS,
@@ -78,6 +80,7 @@ function TabIcon({ name, focused }: { name: string; focused: boolean }) {
 
 export default function App() {
   const navRef = useRef<any>(null);
+  const [agentSheetOpen, setAgentSheetOpen] = useState(false);
 
   useEffect(() => {
     // Register the daily notification + background fetch on every cold start.
@@ -106,8 +109,14 @@ export default function App() {
           on Android so the bar is never white-on-white. */}
       <StatusBar style="dark" backgroundColor={palette.white} translucent={false} />
       <NavigationContainer ref={navRef} theme={navTheme}>
-        <Tabs />
+        <Tabs onOpenAgent={() => setAgentSheetOpen(true)} />
       </NavigationContainer>
+
+      <AgentSheet
+        visible={agentSheetOpen}
+        onClose={() => setAgentSheetOpen(false)}
+        onNavigateToAgent={() => navRef.current?.navigate('Agent')}
+      />
 
       {/* Mounted above the navigator so dialogs render over every screen. */}
       <DialogHost />
@@ -119,9 +128,41 @@ export default function App() {
  * Split out so it can read safe-area insets, which are only available inside
  * SafeAreaProvider. The bar sits above the gesture bar rather than under it.
  */
-function Tabs() {
+/**
+ * Raised centre button that opens the agent command sheet. It occupies a tab
+ * slot but never navigates — the slot's screen is never shown.
+ */
+function HeroTabButton({ onPress }: { onPress: () => void }) {
+  const scale = useRef(new Animated.Value(1)).current;
+  const spring = (to: number) =>
+    Animated.spring(scale, { toValue: to, useNativeDriver: true, speed: 40, bounciness: 0 }).start();
+
+  return (
+    <View style={styles.heroSlot}>
+      <Animated.View style={{ transform: [{ scale }] }}>
+        <Pressable
+          onPress={onPress}
+          onPressIn={() => spring(0.92)}
+          onPressOut={() => spring(1)}
+          accessibilityLabel="Open agent command"
+          style={({ pressed }) => [styles.hero, pressed && styles.heroPressed]}
+        >
+          <Icon name="mic" size={22} color={colors.onFill} bg={colors.fill} />
+        </Pressable>
+      </Animated.View>
+    </View>
+  );
+}
+
+/** Never rendered — the hero slot intercepts its press. */
+function NoopScreen() {
+  return null;
+}
+
+function Tabs({ onOpenAgent }: { onOpenAgent: () => void }) {
   const insets = useSafeAreaInsets();
-  const bottom = Math.max(insets.bottom, 6) + FLOATING_BAR_MARGIN;
+  // Sit just above the system gesture bar rather than floating high up.
+  const bottom = Math.max(insets.bottom, 2) + FLOATING_BAR_BOTTOM;
 
   return (
     <Tab.Navigator
@@ -146,6 +187,18 @@ function Tabs() {
     >
       <Tab.Screen name="Agent" component={BrowserScreen} />
       <Tab.Screen name="Vault" component={VaultScreen} />
+      <Tab.Screen
+        name="Command"
+        component={NoopScreen}
+        options={{
+          tabBarButton: () => <HeroTabButton onPress={onOpenAgent} />,
+          tabBarLabel: () => null,
+        }}
+        listeners={{
+          // Opens the sheet instead of navigating to the placeholder screen.
+          tabPress: (event) => event.preventDefault(),
+        }}
+      />
       <Tab.Screen name="Jobs" component={JobReviewScreen} />
       <Tab.Screen name="Settings" component={SettingsScreen} />
     </Tab.Navigator>
@@ -179,4 +232,24 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+
+  heroSlot: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  /** Raised above the bar's centre; the white ring separates it from the glass. */
+  hero: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: colors.fill,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 10,
+    borderWidth: 3,
+    borderColor: palette.white,
+    shadowColor: palette.black,
+    shadowOpacity: 0.22,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 5 },
+    elevation: 10,
+  },
+  heroPressed: { backgroundColor: colors.fillPressed },
 });

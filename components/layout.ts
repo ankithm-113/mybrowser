@@ -8,8 +8,11 @@
 /** Height of the floating bar itself, excluding safe-area. */
 export const FLOATING_BAR_HEIGHT = 68;
 
-/** Gap between the bar and the screen edges. */
+/** Gap between the bar and the left/right screen edges. */
 export const FLOATING_BAR_MARGIN = 14;
+
+/** Gap below the bar, on top of the safe-area inset. Small, so it sits low. */
+export const FLOATING_BAR_BOTTOM = 4;
 
 export const FLOATING_BAR_RADIUS = 26;
 

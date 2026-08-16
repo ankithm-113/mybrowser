@@ -11,6 +11,7 @@
 import { LLMMessage, LLMResult, ProviderHealth, ProviderId } from '@/types';
 import { KEYS, readJson, writeJson } from './storage';
 import { createLogger, describeKey } from './logger';
+import { getFreeModels } from './openrouterModels';
 import { loadSettings } from './settings';
 
 const log = createLogger('llm');
@@ -37,15 +38,18 @@ export const PROVIDERS: ProviderSpec[] = [
   },
   {
     id: 'openrouter',
+    // Populated at call time from the live catalogue; see openrouterModels.ts.
     label: 'OpenRouter (free)',
-    models: [
-      'deepseek/deepseek-chat-v3.1:free',
-      'qwen/qwen3-235b-a22b:free',
-      'meta-llama/llama-3.3-70b-instruct:free',
-    ],
+    models: [],
     keyField: 'openrouterKey',
   },
 ];
+
+/** Free OpenRouter slugs change often, so resolve them per call. */
+async function resolveModels(provider: ProviderSpec, key: string): Promise<string[]> {
+  if (provider.id !== 'openrouter') return provider.models;
+  return getFreeModels(key);
+}
 
 const DEFAULT_COOLDOWN_MS = 60_000;
 const MAX_COOLDOWN_MS = 15 * 60_000;
@@ -117,6 +121,21 @@ function parseRetryAfter(res: Response): number | undefined {
   if (Number.isFinite(seconds)) return Math.max(1000, seconds * 1000);
   const when = Date.parse(raw);
   return Number.isFinite(when) ? Math.max(1000, when - Date.now()) : undefined;
+}
+
+/**
+ * Groq reports its wait in the error body rather than a Retry-After header
+ * ("Please try again in 12.85s"). Per-minute token limits recover in seconds,
+ * so benching the provider for a flat minute wastes most of the free tier.
+ */
+function parseRetryFromBody(body: string): number | undefined {
+  const match = /try again in ([\d.]+)\s*(ms|s|m)?/i.exec(body);
+  if (!match) return undefined;
+  const value = parseFloat(match[1]);
+  if (!Number.isFinite(value)) return undefined;
+  const unit = (match[2] ?? 's').toLowerCase();
+  const ms = unit === 'ms' ? value : unit === 'm' ? value * 60_000 : value * 1000;
+  return Math.max(1000, Math.ceil(ms) + 750); // small buffer past the window
 }
 
 async function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
@@ -220,7 +239,7 @@ async function callOpenAICompatible(
     log.error(`${model} HTTP ${res.status}`, body.slice(0, 500));
     throw new ProviderError(
       `${model} ${res.status}: ${body.slice(0, 300)}`,
-      parseRetryAfter(res),
+      parseRetryAfter(res) ?? parseRetryFromBody(body),
       res.status === 401 || res.status === 403
     );
   }
@@ -296,7 +315,16 @@ export async function complete(
 
   for (const provider of chain) {
     const key = settings[provider.keyField].trim();
-    for (const model of provider.models) {
+    const models = await resolveModels(provider, key);
+
+    if (!models.length) {
+      const message = `${provider.id}: no usable models available`;
+      log.error(message);
+      errors.push(message);
+      continue;
+    }
+
+    for (const model of models) {
       const startedAt = Date.now();
       try {
         log.info(`-> ${provider.id}/${model}`);
@@ -342,7 +370,7 @@ export async function complete(
           options.onFallback?.(provider.id, isRateLimited ? 'rate limited' : 'auth failed');
           break;
         }
-        if (model === provider.models[provider.models.length - 1]) {
+        if (model === models[models.length - 1]) {
           await markFailure(provider.id, message, retryAfterMs);
           options.onFallback?.(provider.id, message.slice(0, 60));
         }
