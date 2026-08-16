@@ -12,6 +12,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import Browser, { BrowserHandle } from '@/components/Browser';
 import Icon from '@/components/Icon';
 import { TAB_BAR_HEIGHT } from '@/components/layout';
+import StatusSheet from '@/components/StatusSheet';
 import { colors, radius, space, type } from '@/components/theme';
 import { AgentRequest, registerAgentHandler } from '@/services/agentBus';
 import { planTask } from '@/services/agentLoop';
@@ -168,13 +169,11 @@ export default function BrowserScreen() {
         </Pressable>
       </View>
 
-      {!!hint && (
-        <Text style={styles.hint} numberOfLines={2}>
-          {hint}
-        </Text>
-      )}
+      {/* The agent overlay already reports run outcomes, so the sheet is only
+          for messages that happen outside a run (planning, voice, errors). */}
+      <Browser ref={browserRef} onRunFinished={() => setHint('')} />
 
-      <Browser ref={browserRef} onRunFinished={(result) => setHint(result.summary)} />
+      <StatusSheet message={hint} onDismiss={() => setHint('')} />
     </SafeAreaView>
   );
 }
@@ -239,11 +238,4 @@ const styles = StyleSheet.create({
   runButtonDisabled: { backgroundColor: colors.fillDisabled },
   runLabel: { ...type.bodyStrong, color: colors.onFill, fontSize: 15 },
   runLabelDisabled: { color: colors.surface },
-
-  hint: {
-    ...type.small,
-    color: colors.textDim,
-    paddingHorizontal: space.lg,
-    paddingBottom: space.sm,
-  },
 });

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
+  Platform,
   ScrollView,
   StyleSheet,
   Switch,
@@ -20,17 +21,27 @@ import {
   SectionHeader,
   SecretField,
 } from '@/components/ui';
-import { clearCooldowns, getProviderHealth, PROVIDERS } from '@/services/apiManager';
+import {
+  clearCooldowns,
+  getProviderHealth,
+  PROVIDERS,
+  ProviderTestResult,
+  testAllProviders,
+} from '@/services/apiManager';
 import { alert } from '@/services/dialog';
 import { configureScheduler, listSourceLabels } from '@/services/jobScheduler';
 import { DEFAULT_SETTINGS, loadSettings, saveSettings } from '@/services/settings';
-import { AppSettings, ProviderHealth } from '@/types';
+import { AppSettings, ProviderHealth, ProviderId } from '@/types';
 
 export default function SettingsScreen() {
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [health, setHealth] = useState<ProviderHealth[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [tests, setTests] = useState<Record<ProviderId, ProviderTestResult>>(
+    {} as Record<ProviderId, ProviderTestResult>
+  );
 
   const refreshHealth = useCallback(async () => setHealth(await getProviderHealth()), []);
 
@@ -41,6 +52,32 @@ export default function SettingsScreen() {
       setLoading(false);
     })();
   }, [refreshHealth]);
+
+  /**
+   * Saves first — otherwise a key typed but not yet persisted would be tested
+   * as empty — then calls each provider and records the exact failure.
+   */
+  const runTests = useCallback(async () => {
+    setTesting(true);
+    await saveSettings(settings);
+    const results = await testAllProviders();
+    setTests(
+      results.reduce(
+        (acc, r) => ({ ...acc, [r.id]: r }),
+        {} as Record<ProviderId, ProviderTestResult>
+      )
+    );
+    await refreshHealth();
+    setTesting(false);
+
+    const working = results.filter((r) => r.ok);
+    void alert(
+      working.length ? `${working.length} of ${results.length} providers working` : 'All providers failed',
+      results
+        .map((r) => `${r.label}\n${r.ok ? `OK (${r.latencyMs}ms) via ${r.model}` : r.detail}`)
+        .join('\n\n')
+    );
+  }, [settings, refreshHealth]);
 
   const save = useCallback(async () => {
     if (!/^\d{1,2}:\d{2}$/.test(settings.jobSweepTime)) {
@@ -146,6 +183,8 @@ export default function SettingsScreen() {
             const entry = health.find((h) => h.id === provider.id);
             const cooling = (entry?.cooldownUntil ?? 0) > Date.now();
             const configured = !!settings[provider.keyField]?.trim();
+            const test = tests[provider.id];
+            const passed = test?.ok === true;
 
             return (
               <View key={provider.id}>
@@ -156,6 +195,10 @@ export default function SettingsScreen() {
                     <Text style={shared.dim} numberOfLines={2}>
                       {!configured
                         ? 'No key configured'
+                        : test
+                        ? passed
+                          ? `Working — ${test.model} in ${test.latencyMs}ms`
+                          : 'Test failed, see below'
                         : cooling
                         ? `Cooling down until ${new Date(entry!.cooldownUntil).toLocaleTimeString()}`
                         : entry?.lastError
@@ -166,17 +209,40 @@ export default function SettingsScreen() {
                   <View
                     style={[
                       styles.statusDot,
-                      configured && !cooling ? styles.statusDotOk : styles.statusDotOff,
+                      (test ? passed : configured && !cooling)
+                        ? styles.statusDotOk
+                        : styles.statusDotOff,
                     ]}
                   >
-                    {configured && !cooling && (
+                    {(test ? passed : configured && !cooling) && (
                       <Icon name="check" size={10} color={colors.onFill} />
                     )}
                   </View>
                 </View>
+
+                {/* Full, unshortened error — this is the whole point of the test. */}
+                {test && !test.ok && (
+                  <View style={styles.errorBox}>
+                    <Text style={styles.errorText} selectable>
+                      {test.detail}
+                    </Text>
+                  </View>
+                )}
               </View>
             );
           })}
+
+          <View style={styles.spacer} />
+          <Button
+            label="Test all providers"
+            variant="secondary"
+            onPress={runTests}
+            loading={testing}
+          />
+          <Text style={[shared.dim, styles.testHint]}>
+            Saves your keys, then sends a one-word prompt to each provider and shows the exact
+            response. Full request logs also print to the Metro terminal.
+          </Text>
         </View>
 
         {/* --------------------------------- sweep ------------------------------- */}
@@ -308,6 +374,21 @@ const styles = StyleSheet.create({
   },
   statusDotOk: { backgroundColor: colors.fill },
   statusDotOff: { borderWidth: 1.5, borderColor: colors.borderStrong },
+  errorBox: {
+    backgroundColor: colors.sunken,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: space.md,
+    marginBottom: space.md,
+  },
+  errorText: {
+    fontSize: 11,
+    lineHeight: 16,
+    color: colors.text,
+    fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace' }),
+  },
+  testHint: { marginTop: space.sm },
   toggleRow: {
     flexDirection: 'row',
     alignItems: 'center',

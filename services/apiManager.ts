@@ -10,7 +10,10 @@
 
 import { LLMMessage, LLMResult, ProviderHealth, ProviderId } from '@/types';
 import { KEYS, readJson, writeJson } from './storage';
+import { createLogger, describeKey } from './logger';
 import { loadSettings } from './settings';
+
+const log = createLogger('llm');
 
 interface ProviderSpec {
   id: ProviderId;
@@ -167,8 +170,9 @@ async function callGemini(
 
   if (!res.ok) {
     const body = await res.text();
+    log.error(`gemini/${model} HTTP ${res.status}`, body.slice(0, 500));
     throw new ProviderError(
-      `gemini ${res.status}: ${body.slice(0, 200)}`,
+      `gemini/${model} ${res.status}: ${body.slice(0, 300)}`,
       parseRetryAfter(res),
       res.status === 401 || res.status === 403
     );
@@ -176,7 +180,13 @@ async function callGemini(
   const json: any = await res.json();
   const text: string =
     json?.candidates?.[0]?.content?.parts?.map((p: any) => p.text ?? '').join('') ?? '';
-  if (!text.trim()) throw new ProviderError('gemini returned an empty candidate');
+  if (!text.trim()) {
+    // A blocked prompt returns 200 with no candidate — surface why.
+    const reason =
+      json?.promptFeedback?.blockReason ?? json?.candidates?.[0]?.finishReason ?? 'unknown';
+    log.error(`gemini/${model} empty candidate, reason=${reason}`, JSON.stringify(json).slice(0, 400));
+    throw new ProviderError(`gemini/${model} returned no text (reason: ${reason})`);
+  }
   return text;
 }
 
@@ -207,15 +217,19 @@ async function callOpenAICompatible(
 
   if (!res.ok) {
     const body = await res.text();
+    log.error(`${model} HTTP ${res.status}`, body.slice(0, 500));
     throw new ProviderError(
-      `${model} ${res.status}: ${body.slice(0, 200)}`,
+      `${model} ${res.status}: ${body.slice(0, 300)}`,
       parseRetryAfter(res),
       res.status === 401 || res.status === 403
     );
   }
   const json: any = await res.json();
   const text: string = json?.choices?.[0]?.message?.content ?? '';
-  if (!text.trim()) throw new ProviderError(`${model} returned an empty choice`);
+  if (!text.trim()) {
+    log.error(`${model} empty choice`, JSON.stringify(json).slice(0, 400));
+    throw new ProviderError(`${model} returned an empty choice`);
+  }
   return text;
 }
 
@@ -226,6 +240,8 @@ export interface CompleteOptions {
   json?: boolean;
   /** Restrict the chain, e.g. ['groq'] for latency-sensitive calls. */
   only?: ProviderId[];
+  /** Try providers even if they are cooling down — used by the Test button. */
+  ignoreCooldown?: boolean;
   /** Called whenever the router falls through to another provider. */
   onFallback?: (from: ProviderId, reason: string) => void;
 }
@@ -244,28 +260,46 @@ export async function complete(
   const h = await getHealth();
   const now = Date.now();
 
+  log.info(
+    'keys:',
+    PROVIDERS.map((p) => `${p.id}=${describeKey(settings[p.keyField] ?? '')}`).join('  ')
+  );
+
   const configured = PROVIDERS.filter(
     (p) => settings[p.keyField]?.trim() && (!options.only || options.only.includes(p.id))
   );
 
   if (configured.length === 0) {
+    log.error('no provider has a key configured');
     throw new Error(
       'No LLM API key configured. Add a Gemini, Groq, or OpenRouter key in Settings.'
     );
   }
 
-  const ready = configured.filter((p) => h[p.id].cooldownUntil <= now);
+  const ready = options.ignoreCooldown
+    ? configured
+    : configured.filter((p) => h[p.id].cooldownUntil <= now);
   const chain =
     ready.length > 0
       ? ready
       : [...configured].sort((a, b) => h[a.id].cooldownUntil - h[b.id].cooldownUntil).slice(0, 1);
+
+  log.info(
+    `chain: ${chain.map((p) => p.id).join(' -> ')}`,
+    `(json=${options.json ?? false}, cooling=${configured
+      .filter((p) => h[p.id].cooldownUntil > now)
+      .map((p) => p.id)
+      .join(',') || 'none'})`
+  );
 
   const errors: string[] = [];
 
   for (const provider of chain) {
     const key = settings[provider.keyField].trim();
     for (const model of provider.models) {
+      const startedAt = Date.now();
       try {
+        log.info(`-> ${provider.id}/${model}`);
         const text =
           provider.id === 'gemini'
             ? await callGemini(model, messages, key, options.json ?? false)
@@ -289,10 +323,14 @@ export async function complete(
                 }
               );
         await markSuccess(provider.id);
+        log.info(
+          `<- ${provider.id}/${model} OK in ${Date.now() - startedAt}ms, ${text.length} chars`
+        );
         return { text, provider: provider.id, model };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         errors.push(message);
+        log.warn(`<- ${provider.id}/${model} FAILED after ${Date.now() - startedAt}ms: ${message}`);
         const retryAfterMs = err instanceof ProviderError ? err.retryAfterMs : undefined;
         const isRateLimited = /\b429\b|rate.?limit|quota/i.test(message);
         const isFatalKey = err instanceof ProviderError && err.fatal;
@@ -312,7 +350,9 @@ export async function complete(
     }
   }
 
-  throw new Error(`All LLM providers failed.\n${errors.slice(-3).join('\n')}`);
+  log.error(`ALL PROVIDERS FAILED (${errors.length} attempts)`);
+  errors.forEach((e, i) => log.error(`  attempt ${i + 1}: ${e}`));
+  throw new Error(`All LLM providers failed.\n\n${errors.join('\n\n')}`);
 }
 
 /**
@@ -326,6 +366,62 @@ export async function completeJson<T>(
 ): Promise<{ value: T; provider: ProviderId }> {
   const result = await complete(messages, { ...options, json: true });
   return { value: extractJson<T>(result.text), provider: result.provider };
+}
+
+export interface ProviderTestResult {
+  id: ProviderId;
+  label: string;
+  ok: boolean;
+  model?: string;
+  latencyMs?: number;
+  detail: string;
+}
+
+/**
+ * Sends a minimal prompt to one provider and reports exactly what came back.
+ * Bypasses cooldowns so a rate-limited provider can still be diagnosed.
+ */
+export async function testProvider(id: ProviderId): Promise<ProviderTestResult> {
+  const spec = PROVIDERS.find((p) => p.id === id)!;
+  const settings = await loadSettings();
+  const startedAt = Date.now();
+
+  if (!settings[spec.keyField]?.trim()) {
+    return { id, label: spec.label, ok: false, detail: 'No API key set for this provider.' };
+  }
+
+  try {
+    const result = await complete([{ role: 'user', content: 'Reply with the single word: ok' }], {
+      only: [id],
+      ignoreCooldown: true,
+    });
+    return {
+      id,
+      label: spec.label,
+      ok: true,
+      model: result.model,
+      latencyMs: Date.now() - startedAt,
+      detail: `Replied "${result.text.trim().slice(0, 40)}"`,
+    };
+  } catch (err) {
+    return {
+      id,
+      label: spec.label,
+      ok: false,
+      latencyMs: Date.now() - startedAt,
+      detail: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+export async function testAllProviders(): Promise<ProviderTestResult[]> {
+  log.info('=== running provider diagnostics ===');
+  const results: ProviderTestResult[] = [];
+  for (const provider of PROVIDERS) {
+    results.push(await testProvider(provider.id));
+  }
+  results.forEach((r) => log.info(`test ${r.id}: ${r.ok ? 'OK' : 'FAIL'} - ${r.detail}`));
+  return results;
 }
 
 export function extractJson<T>(raw: string): T {
