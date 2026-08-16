@@ -11,6 +11,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 
 import Icon from '@/components/Icon';
+import { TAB_BAR_INSET } from '@/components/layout';
 import { colors, radius, shared, space, type } from '@/components/theme';
 import { Badge, Button, Chip, EmptyState } from '@/components/ui';
 import { dispatch, onRunComplete } from '@/services/agentBus';
@@ -235,7 +236,7 @@ const styles = StyleSheet.create({
   },
   filterChips: { flexDirection: 'row', gap: space.sm, flex: 1 },
 
-  list: { paddingHorizontal: space.lg, paddingBottom: space.xxl },
+  list: { paddingHorizontal: space.lg, paddingBottom: TAB_BAR_INSET },
 
   jobHeader: { flexDirection: 'row', gap: space.md, alignItems: 'flex-start' },
   jobTitle: { ...type.h2, color: colors.text, marginBottom: 3 },

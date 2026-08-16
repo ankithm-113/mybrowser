@@ -158,13 +158,17 @@ export async function runJobSweep(): Promise<SweepResult> {
 
   if (matches.length > 0) {
     const top = matches.sort((a, b) => b.matchScore - a.matchScore)[0];
+    // The channel must exist before delivery, or Android drops this onto the
+    // default (low-importance) channel and it never heads-up displays.
+    await requestNotificationPermission();
     await Notifications.scheduleNotificationAsync({
       content: {
         title: `${matches.length} new job match${matches.length === 1 ? '' : 'es'} to review`,
         body: `Top pick: ${top.title} at ${top.company} (${top.matchScore}% match). Tap to review.`,
         data: { screen: 'JobReview' },
       },
-      trigger: null,
+      trigger:
+        Platform.OS === 'android' ? ({ channelId: 'job-alerts', seconds: 1 } as any) : null,
     });
   }
 

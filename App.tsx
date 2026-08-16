@@ -7,8 +7,10 @@ import { NavigationContainer, DefaultTheme } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 
 import DialogHost from '@/components/DialogHost';
+import Glass from '@/components/Glass';
 import Icon, { IconName } from '@/components/Icon';
-import { colors, palette, space, type } from '@/components/theme';
+import { TAB_BAR_HEIGHT } from '@/components/layout';
+import { colors, palette, radius, space, type } from '@/components/theme';
 import BrowserScreen from '@/screens/BrowserScreen';
 import JobReviewScreen from '@/screens/JobReviewScreen';
 import SettingsScreen from '@/screens/SettingsScreen';
@@ -51,15 +53,22 @@ const TAB_ICONS: Record<string, IconName> = {
  * available, fill is what carries the selected state.
  */
 function TabIcon({ name, focused }: { name: string; focused: boolean }) {
-  return (
-    <View style={[styles.tabIcon, focused && styles.tabIconFocused]}>
-      <Icon
-        name={TAB_ICONS[name] ?? 'globe'}
-        size={20}
-        color={focused ? colors.onFill : colors.textDim}
-        bg={focused ? colors.fill : colors.surface}
-      />
-    </View>
+  const glyph = (
+    <Icon
+      name={TAB_ICONS[name] ?? 'globe'}
+      size={20}
+      color={focused ? palette.white : colors.textDim}
+      bg={focused ? palette.gray800 : 'transparent'}
+    />
+  );
+
+  // Selected tab is a smoked-glass capsule rather than a flat black block.
+  return focused ? (
+    <Glass tone="dark" intensity={55} radiusSize={radius.pill} style={styles.tabIcon}>
+      {glyph}
+    </Glass>
+  ) : (
+    <View style={styles.tabIcon}>{glyph}</View>
   );
 }
 
@@ -101,6 +110,16 @@ export default function App() {
             tabBarInactiveTintColor: colors.textDim,
             tabBarLabelStyle: styles.tabLabel,
             tabBarItemStyle: styles.tabItem,
+            // Floating + transparent so content scrolls under the frosted bar.
+            tabBarBackground: () => (
+              <Glass
+                tone="light"
+                intensity={60}
+                radiusSize={0}
+                bordered={false}
+                style={StyleSheet.absoluteFill as any}
+              />
+            ),
             tabBarIcon: ({ focused }) => <TabIcon name={route.name} focused={focused} />,
           })}
         >
@@ -119,22 +138,25 @@ export default function App() {
 
 const styles = StyleSheet.create({
   tabBar: {
-    backgroundColor: colors.surface,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-    height: Platform.OS === 'ios' ? 88 : 68,
-    paddingBottom: Platform.OS === 'ios' ? 28 : 10,
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'transparent',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: 'rgba(10,10,10,0.12)',
+    height: TAB_BAR_HEIGHT,
+    paddingBottom: Platform.OS === 'ios' ? 26 : 12,
     paddingTop: space.sm,
     elevation: 0,
   },
   tabItem: { paddingTop: 2 },
-  tabLabel: { ...type.micro, marginTop: 2 },
+  tabLabel: { ...type.micro, marginTop: 3 },
   tabIcon: {
-    width: 46,
-    height: 30,
-    borderRadius: 15,
+    width: 48,
+    height: 32,
+    borderRadius: radius.pill,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  tabIconFocused: { backgroundColor: colors.fill },
 });

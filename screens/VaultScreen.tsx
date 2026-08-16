@@ -11,6 +11,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import Icon from '@/components/Icon';
+import { TAB_BAR_INSET } from '@/components/layout';
 import { colors, radius, shared, space, switchColors, type } from '@/components/theme';
 import { Badge, Button, Divider, Field, Meter, SectionHeader } from '@/components/ui';
 import { alert, confirm } from '@/services/dialog';
@@ -477,5 +478,5 @@ const styles = StyleSheet.create({
     paddingVertical: space.sm,
   },
   spacer: { height: space.md },
-  bottomSpace: { height: space.xxl },
+  bottomSpace: { height: TAB_BAR_INSET },
 });

@@ -11,6 +11,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import Browser, { BrowserHandle } from '@/components/Browser';
 import Icon from '@/components/Icon';
+import { TAB_BAR_HEIGHT } from '@/components/layout';
 import { colors, radius, space, type } from '@/components/theme';
 import { AgentRequest, registerAgentHandler } from '@/services/agentBus';
 import { planTask } from '@/services/agentLoop';
@@ -179,7 +180,11 @@ export default function BrowserScreen() {
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.bg },
+  /**
+   * The tab bar floats, so the browser reserves its height rather than letting
+   * the frosted bar cover the bottom of live web pages.
+   */
+  root: { flex: 1, backgroundColor: colors.bg, paddingBottom: TAB_BAR_HEIGHT },
 
   commandBar: {
     flexDirection: 'row',

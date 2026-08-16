@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Animated, BackHandler, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { DialogRequest, registerDialogHandler } from '@/services/dialog';
+import Glass from './Glass';
 import { Button } from './ui';
 import { colors, elevation, radius, space, type } from './theme';
 
@@ -85,7 +86,7 @@ export default function DialogHost() {
       <View style={styles.scrim}>
         <Animated.View
           style={[
-            styles.card,
+            styles.cardShadow,
             {
               opacity: anim,
               transform: [
@@ -94,20 +95,22 @@ export default function DialogHost() {
             },
           ]}
         >
-          <Text style={styles.title}>{title}</Text>
-          {!!message && <Text style={styles.message}>{message}</Text>}
+          <Glass tone="light" intensity={80} radiusSize={radius.xl} style={styles.card}>
+            <Text style={styles.title}>{title}</Text>
+            {!!message && <Text style={styles.message}>{message}</Text>}
 
-          <View style={[styles.actions, stacked && styles.actionsStacked]}>
-            {actions.map((action, index) => (
-              <Button
-                key={`${action.label}-${index}`}
-                label={action.label}
-                variant={action.variant ?? 'secondary'}
-                onPress={() => choose(index)}
-                style={stacked ? undefined : styles.action}
-              />
-            ))}
-          </View>
+            <View style={[styles.actions, stacked && styles.actionsStacked]}>
+              {actions.map((action, index) => (
+                <Button
+                  key={`${action.label}-${index}`}
+                  label={action.label}
+                  variant={action.variant ?? 'secondary'}
+                  onPress={() => choose(index)}
+                  style={stacked ? undefined : styles.action}
+                />
+              ))}
+            </View>
+          </Glass>
         </Animated.View>
 
         {/* Blocks taps behind the card without dismissing — dialogs are modal. */}
@@ -126,16 +129,13 @@ const styles = StyleSheet.create({
     padding: space.xl,
   },
   backdrop: { ...StyleSheet.absoluteFillObject, zIndex: -1 },
-  card: {
+  cardShadow: {
     width: '100%',
     maxWidth: 420,
-    backgroundColor: colors.surface,
     borderRadius: radius.xl,
-    borderWidth: 1,
-    borderColor: colors.border,
-    padding: space.xl,
     ...elevation.raised,
   },
+  card: { padding: space.xl },
   title: { ...type.h1, fontSize: 19, color: colors.text },
   message: { ...type.body, color: colors.textDim, lineHeight: 21, marginTop: space.sm },
   actions: { flexDirection: 'row', gap: space.sm, marginTop: space.xl },

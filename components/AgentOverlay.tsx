@@ -2,6 +2,7 @@ import React, { useEffect, useRef } from 'react';
 import { ActivityIndicator, Animated, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { AgentStatus } from '@/types';
+import Glass from './Glass';
 import Icon from './Icon';
 import { colors, elevation, radius, space, type } from './theme';
 
@@ -34,7 +35,7 @@ export default function AgentOverlay({ status, onStop, lastThought }: Props) {
     <View style={styles.wrap} pointerEvents="box-none">
       <Animated.View
         style={[
-          styles.card,
+          styles.cardShadow,
           {
             opacity: slide,
             transform: [
@@ -43,6 +44,7 @@ export default function AgentOverlay({ status, onStop, lastThought }: Props) {
           },
         ]}
       >
+        <Glass tone="light" intensity={70} radiusSize={radius.lg} style={styles.card}>
         <View style={styles.headerRow}>
           {busy ? (
             <ActivityIndicator size="small" color={colors.text} />
@@ -77,10 +79,11 @@ export default function AgentOverlay({ status, onStop, lastThought }: Props) {
           <View style={[styles.progressFill, { width: `${progress * 100}%` }]} />
         </View>
 
-        <Text style={styles.meta}>
-          Step {status.step} of {status.maxSteps}
-          {status.provider ? `  ·  ${status.provider}` : ''}
-        </Text>
+          <Text style={styles.meta}>
+            Step {status.step} of {status.maxSteps}
+            {status.provider ? `  ·  ${status.provider}` : ''}
+          </Text>
+        </Glass>
       </Animated.View>
     </View>
   );
@@ -88,14 +91,8 @@ export default function AgentOverlay({ status, onStop, lastThought }: Props) {
 
 const styles = StyleSheet.create({
   wrap: { position: 'absolute', left: space.md, right: space.md, bottom: space.lg },
-  card: {
-    backgroundColor: colors.surface,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: colors.borderStrong,
-    padding: space.lg,
-    ...elevation.raised,
-  },
+  cardShadow: { borderRadius: radius.lg, ...elevation.raised },
+  card: { padding: space.lg },
   headerRow: { flexDirection: 'row', alignItems: 'center', gap: space.md },
   statusDot: {
     width: 20,
