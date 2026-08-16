@@ -1,11 +1,20 @@
-import { Platform } from 'react-native';
-
 /**
- * The tab bar floats over content so the glass has something to blur, which
- * means every scrollable screen has to reserve this much room at the bottom.
- * Shared from one place so the bar and the padding can never drift apart.
+ * The tab bar floats as a detached glass slab with a gap on every side, so
+ * content scrolls visibly beneath it — that motion is what makes the blur
+ * legible as glass. Every scrollable screen must reserve TAB_BAR_INSET at the
+ * bottom, and it all derives from here so the numbers cannot drift apart.
  */
-export const TAB_BAR_HEIGHT = Platform.OS === 'ios' ? 84 : 70;
 
-/** Bottom padding for scroll containers sitting under the floating tab bar. */
-export const TAB_BAR_INSET = TAB_BAR_HEIGHT + 16;
+/** Height of the floating bar itself, excluding safe-area. */
+export const FLOATING_BAR_HEIGHT = 68;
+
+/** Gap between the bar and the screen edges. */
+export const FLOATING_BAR_MARGIN = 14;
+
+export const FLOATING_BAR_RADIUS = 26;
+
+/** Bottom padding for scroll containers sitting under the floating bar. */
+export const TAB_BAR_INSET = FLOATING_BAR_HEIGHT + FLOATING_BAR_MARGIN + 40;
+
+/** Space the Browser screen reserves so the bar never covers a live page. */
+export const TAB_BAR_HEIGHT = FLOATING_BAR_HEIGHT + FLOATING_BAR_MARGIN;

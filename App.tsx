@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { Platform, StyleSheet, View } from 'react-native';
-import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import * as Notifications from 'expo-notifications';
 import { NavigationContainer, DefaultTheme } from '@react-navigation/native';
@@ -9,7 +9,11 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import DialogHost from '@/components/DialogHost';
 import Glass from '@/components/Glass';
 import Icon, { IconName } from '@/components/Icon';
-import { TAB_BAR_HEIGHT } from '@/components/layout';
+import {
+  FLOATING_BAR_HEIGHT,
+  FLOATING_BAR_MARGIN,
+  FLOATING_BAR_RADIUS,
+} from '@/components/layout';
 import { colors, palette, radius, space, type } from '@/components/theme';
 import BrowserScreen from '@/screens/BrowserScreen';
 import JobReviewScreen from '@/screens/JobReviewScreen';
@@ -102,32 +106,7 @@ export default function App() {
           on Android so the bar is never white-on-white. */}
       <StatusBar style="dark" backgroundColor={palette.white} translucent={false} />
       <NavigationContainer ref={navRef} theme={navTheme}>
-        <Tab.Navigator
-          screenOptions={({ route }) => ({
-            headerShown: false,
-            tabBarStyle: styles.tabBar,
-            tabBarActiveTintColor: colors.text,
-            tabBarInactiveTintColor: colors.textDim,
-            tabBarLabelStyle: styles.tabLabel,
-            tabBarItemStyle: styles.tabItem,
-            // Floating + transparent so content scrolls under the frosted bar.
-            tabBarBackground: () => (
-              <Glass
-                tone="light"
-                intensity={60}
-                radiusSize={0}
-                bordered={false}
-                style={StyleSheet.absoluteFill as any}
-              />
-            ),
-            tabBarIcon: ({ focused }) => <TabIcon name={route.name} focused={focused} />,
-          })}
-        >
-          <Tab.Screen name="Agent" component={BrowserScreen} />
-          <Tab.Screen name="Vault" component={VaultScreen} />
-          <Tab.Screen name="Jobs" component={JobReviewScreen} />
-          <Tab.Screen name="Settings" component={SettingsScreen} />
-        </Tab.Navigator>
+        <Tabs />
       </NavigationContainer>
 
       {/* Mounted above the navigator so dialogs render over every screen. */}
@@ -136,25 +115,66 @@ export default function App() {
   );
 }
 
+/**
+ * Split out so it can read safe-area insets, which are only available inside
+ * SafeAreaProvider. The bar sits above the gesture bar rather than under it.
+ */
+function Tabs() {
+  const insets = useSafeAreaInsets();
+  const bottom = Math.max(insets.bottom, 6) + FLOATING_BAR_MARGIN;
+
+  return (
+    <Tab.Navigator
+      screenOptions={({ route }) => ({
+        headerShown: false,
+        tabBarStyle: [styles.tabBar, { bottom }],
+        tabBarActiveTintColor: colors.text,
+        tabBarInactiveTintColor: colors.textDim,
+        tabBarLabelStyle: styles.tabLabel,
+        tabBarItemStyle: styles.tabItem,
+        // Detached, transparent bar so content scrolls visibly under the glass.
+        tabBarBackground: () => (
+          <Glass
+            tone="light"
+            intensity={75}
+            radiusSize={FLOATING_BAR_RADIUS}
+            style={StyleSheet.absoluteFill as any}
+          />
+        ),
+        tabBarIcon: ({ focused }) => <TabIcon name={route.name} focused={focused} />,
+      })}
+    >
+      <Tab.Screen name="Agent" component={BrowserScreen} />
+      <Tab.Screen name="Vault" component={VaultScreen} />
+      <Tab.Screen name="Jobs" component={JobReviewScreen} />
+      <Tab.Screen name="Settings" component={SettingsScreen} />
+    </Tab.Navigator>
+  );
+}
+
 const styles = StyleSheet.create({
+  /** Detached slab: inset from every edge, rounded, with a soft neutral shadow. */
   tabBar: {
     position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
+    left: FLOATING_BAR_MARGIN,
+    right: FLOATING_BAR_MARGIN,
+    height: FLOATING_BAR_HEIGHT,
     backgroundColor: 'transparent',
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: 'rgba(10,10,10,0.12)',
-    height: TAB_BAR_HEIGHT,
-    paddingBottom: Platform.OS === 'ios' ? 26 : 12,
+    borderTopWidth: 0,
+    borderRadius: FLOATING_BAR_RADIUS,
+    paddingBottom: space.sm,
     paddingTop: space.sm,
-    elevation: 0,
+    shadowColor: palette.black,
+    shadowOpacity: 0.14,
+    shadowRadius: 20,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 12,
   },
   tabItem: { paddingTop: 2 },
   tabLabel: { ...type.micro, marginTop: 3 },
   tabIcon: {
-    width: 48,
-    height: 32,
+    width: 46,
+    height: 30,
     borderRadius: radius.pill,
     alignItems: 'center',
     justifyContent: 'center',
