@@ -7,7 +7,6 @@ import React, {
   useState,
 } from 'react';
 import {
-  Alert,
   KeyboardAvoidingView,
   LayoutAnimation,
   Platform,
@@ -24,6 +23,7 @@ import { WebView, WebViewNavigation } from 'react-native-webview';
 import { DOM_READER_JS } from '@/assets/dom_reader';
 import { AgentDecision, AgentRunResult, AgentStatus } from '@/types';
 import { runAgent } from '@/services/agentLoop';
+import { confirm } from '@/services/dialog';
 import { executor } from '@/services/executor';
 import AgentOverlay from './AgentOverlay';
 import { IconButton } from './ui';
@@ -156,16 +156,10 @@ const Browser = forwardRef<BrowserHandle, Props>(({ onRunFinished }, ref) => {
 
   const confirmSubmit = useCallback(
     (decision: AgentDecision) =>
-      new Promise<boolean>((resolve) => {
-        Alert.alert(
-          'Confirm submission',
-          `The agent wants to submit this page.\n\n"${decision.thought}"`,
-          [
-            { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
-            { text: 'Submit', style: 'destructive', onPress: () => resolve(true) },
-          ],
-          { cancelable: false }
-        );
+      confirm({
+        title: 'Confirm submission',
+        message: `The agent wants to submit this page.\n\n"${decision.thought}"`,
+        confirmLabel: 'Submit',
       }),
     []
   );

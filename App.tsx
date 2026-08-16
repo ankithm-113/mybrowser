@@ -6,6 +6,7 @@ import * as Notifications from 'expo-notifications';
 import { NavigationContainer, DefaultTheme } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 
+import DialogHost from '@/components/DialogHost';
 import Icon, { IconName } from '@/components/Icon';
 import { colors, palette, space, type } from '@/components/theme';
 import BrowserScreen from '@/screens/BrowserScreen';
@@ -109,6 +110,9 @@ export default function App() {
           <Tab.Screen name="Settings" component={SettingsScreen} />
         </Tab.Navigator>
       </NavigationContainer>
+
+      {/* Mounted above the navigator so dialogs render over every screen. */}
+      <DialogHost />
     </SafeAreaProvider>
   );
 }

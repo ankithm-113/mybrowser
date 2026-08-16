@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
-  Alert,
   FlatList,
   Pressable,
   RefreshControl,
@@ -15,6 +14,7 @@ import Icon from '@/components/Icon';
 import { colors, radius, shared, space, type } from '@/components/theme';
 import { Badge, Button, Chip, EmptyState } from '@/components/ui';
 import { dispatch, onRunComplete } from '@/services/agentBus';
+import { alert } from '@/services/dialog';
 import { getLastSweep, loadJobs, runJobSweep, updateJob } from '@/services/jobScheduler';
 import { loadVault } from '@/services/knowledgeVault';
 import { JobMatch } from '@/types';
@@ -55,13 +55,13 @@ export default function JobReviewScreen() {
     try {
       const result = await runJobSweep();
       await refresh();
-      Alert.alert(
+      void alert(
         'Sweep complete',
         `${result.found} new postings seen, ${result.matched} passed your score threshold.` +
           (result.errors.length ? `\n\nSources that failed:\n${result.errors.join('\n')}` : '')
       );
     } catch (err) {
-      Alert.alert('Sweep failed', err instanceof Error ? err.message : String(err));
+      void alert('Sweep failed', err instanceof Error ? err.message : String(err));
     } finally {
       setSweeping(false);
     }
@@ -71,7 +71,7 @@ export default function JobReviewScreen() {
     async (job: JobMatch) => {
       const vault = await loadVault();
       if (!vault.profile.fullName || !vault.profile.email) {
-        Alert.alert(
+        void alert(
           'Vault incomplete',
           'Add at least your name and email in the Vault tab before auto-applying.'
         );

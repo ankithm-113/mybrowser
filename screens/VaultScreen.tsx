@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -14,6 +13,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import Icon from '@/components/Icon';
 import { colors, radius, shared, space, switchColors, type } from '@/components/theme';
 import { Badge, Button, Divider, Field, Meter, SectionHeader } from '@/components/ui';
+import { alert, confirm } from '@/services/dialog';
 import {
   EMPTY_VAULT,
   blankProject,
@@ -75,33 +75,30 @@ export default function VaultScreen() {
       const result = await importDocument(kind);
       if (!result.cancelled) {
         setVault(await loadVault());
-        if (result.warning) Alert.alert('Imported with a caveat', result.warning);
+        if (result.warning) void alert('Imported with a caveat', result.warning);
         else if (result.document) {
-          Alert.alert(
+          void alert(
             'Imported',
             `${result.document.name} — extracted ${result.document.extractedText.length} characters of text.`
           );
         }
       }
     } catch (err) {
-      Alert.alert('Import failed', err instanceof Error ? err.message : String(err));
+      void alert('Import failed', err instanceof Error ? err.message : String(err));
     } finally {
       setImporting(false);
     }
   }, []);
 
-  const onDeleteDoc = useCallback((id: string, name: string) => {
-    Alert.alert('Remove document', `Delete "${name}" from the vault?`, [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: async () => {
-          await deleteDocument(id);
-          setVault(await loadVault());
-        },
-      },
-    ]);
+  const onDeleteDoc = useCallback(async (id: string, name: string) => {
+    const approved = await confirm({
+      title: 'Remove document',
+      message: `Delete "${name}" from the vault? This also removes the file from the app sandbox.`,
+      confirmLabel: 'Delete',
+    });
+    if (!approved) return;
+    await deleteDocument(id);
+    setVault(await loadVault());
   }, []);
 
   if (loading) {

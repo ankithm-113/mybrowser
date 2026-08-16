@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Pressable,
   StyleSheet,
   Text,
@@ -15,6 +14,7 @@ import Icon from '@/components/Icon';
 import { colors, radius, space, type } from '@/components/theme';
 import { AgentRequest, registerAgentHandler } from '@/services/agentBus';
 import { planTask } from '@/services/agentLoop';
+import { alert, confirm } from '@/services/dialog';
 import { isVoiceAvailable, startListening, VoiceSession } from '@/services/voice';
 
 /**
@@ -50,7 +50,7 @@ export default function BrowserScreen() {
     const text = rawCommand.trim();
     if (!text) return;
     if (browserRef.current?.isRunning()) {
-      Alert.alert('Agent busy', 'Stop the current run before starting a new one.');
+      void alert('Agent busy', 'Stop the current run before starting a new one.');
       return;
     }
 
@@ -60,29 +60,24 @@ export default function BrowserScreen() {
       const plan = await planTask(text);
       setPlanning(false);
 
-      const start = () => {
-        setHint(plan.note || '');
-        setCommand('');
-        void browserRef.current?.runTask(plan.task, plan.startUrl);
-      };
-
       if (plan.needsConfirmation) {
-        Alert.alert(
-          'Confirm this task',
-          `${plan.task}\n\nStarting at: ${plan.startUrl}\n\n` +
+        const approved = await confirm({
+          title: 'Confirm this task',
+          message:
+            `${plan.task}\n\nStarting at: ${plan.startUrl}\n\n` +
             'This task may spend money or send something on your behalf.',
-          [
-            { text: 'Cancel', style: 'cancel' },
-            { text: 'Run it', onPress: start },
-          ]
-        );
-      } else {
-        start();
+          confirmLabel: 'Run it',
+        });
+        if (!approved) return;
       }
+
+      setHint(plan.note || '');
+      setCommand('');
+      void browserRef.current?.runTask(plan.task, plan.startUrl);
     } catch (err) {
       setPlanning(false);
       setHint('');
-      Alert.alert('Could not plan the task', err instanceof Error ? err.message : String(err));
+      void alert('Could not plan the task', err instanceof Error ? err.message : String(err));
     }
   }, []);
 
@@ -92,10 +87,10 @@ export default function BrowserScreen() {
       return;
     }
     if (!isVoiceAvailable()) {
-      Alert.alert(
+      void alert(
         'Voice unavailable',
-        'Speech recognition needs a development build (it is not in Expo Go). ' +
-          'Run `npx expo run:android` or `run:ios`, then try again.'
+        'Speech recognition needs a development build (it is not available in Expo Go). ' +
+          'Run "npx expo run:android" or "run:ios", then try again.'
       );
       return;
     }
@@ -115,7 +110,7 @@ export default function BrowserScreen() {
         voiceRef.current = null;
         if (error) {
           setHint('');
-          Alert.alert('Voice error', error);
+          void alert('Voice error', error);
         }
       }
     );

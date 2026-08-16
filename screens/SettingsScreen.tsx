@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   ScrollView,
   StyleSheet,
   Switch,
@@ -21,6 +20,7 @@ import {
   SecretField,
 } from '@/components/ui';
 import { clearCooldowns, getProviderHealth, PROVIDERS } from '@/services/apiManager';
+import { alert } from '@/services/dialog';
 import { configureScheduler, listSourceLabels } from '@/services/jobScheduler';
 import { DEFAULT_SETTINGS, loadSettings, saveSettings } from '@/services/settings';
 import { AppSettings, ProviderHealth } from '@/types';
@@ -43,7 +43,7 @@ export default function SettingsScreen() {
 
   const save = useCallback(async () => {
     if (!/^\d{1,2}:\d{2}$/.test(settings.jobSweepTime)) {
-      Alert.alert('Invalid time', 'Use 24-hour HH:MM, for example 21:00.');
+      void alert('Invalid time', 'Use 24-hour HH:MM, for example 21:00.');
       return;
     }
     setSaving(true);
@@ -51,7 +51,7 @@ export default function SettingsScreen() {
     const scheduler = await configureScheduler();
     await refreshHealth();
     setSaving(false);
-    Alert.alert(
+    void alert(
       'Settings saved',
       `Notifications: ${scheduler.notifications ? 'granted' : 'denied'}\n` +
         `Background fetch: ${scheduler.backgroundFetch ? 'registered' : 'unavailable'}`
