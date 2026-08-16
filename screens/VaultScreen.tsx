@@ -13,7 +13,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import Icon from '@/components/Icon';
 import { TAB_BAR_INSET } from '@/components/layout';
 import { colors, radius, shared, space, switchColors, type } from '@/components/theme';
-import { Badge, Button, Divider, Field, Meter, SectionHeader } from '@/components/ui';
+import { Badge, Button, Divider, Field, GlassCard, Meter, SectionHeader } from '@/components/ui';
 import { alert, confirm } from '@/services/dialog';
 import {
   EMPTY_VAULT,
@@ -181,7 +181,7 @@ export default function VaultScreen() {
           </Text>
         </View>
 
-        <View style={shared.card}>
+        <GlassCard>
           <View style={styles.meterHeader}>
             <Text style={shared.h2}>Profile completeness</Text>
             <Text style={styles.meterValue}>{completeness.percent}%</Text>
@@ -192,10 +192,10 @@ export default function VaultScreen() {
               Missing: {completeness.missing.join(', ')}
             </Text>
           )}
-        </View>
+        </GlassCard>
 
         {/* ------------------------------ documents ----------------------------- */}
-        <View style={shared.card}>
+        <GlassCard>
           <SectionHeader title="Documents" />
           <Text style={[shared.dim, styles.intro]}>
             PDF, DOCX, TXT and MD are parsed on-device — no upload, no OCR service.
@@ -263,10 +263,10 @@ export default function VaultScreen() {
               </View>
             ))
           )}
-        </View>
+        </GlassCard>
 
         {/* ------------------------------- identity ----------------------------- */}
-        <View style={shared.card}>
+        <GlassCard>
           <SectionHeader title="Contact & identity" />
           {field('Full name', 'fullName')}
           {field('Email', 'email', { keyboardType: 'email-address' })}
@@ -274,17 +274,17 @@ export default function VaultScreen() {
           {field('Location', 'location')}
           {field('Headline', 'headline')}
           {field('Professional summary', 'summary', { multiline: true })}
-        </View>
+        </GlassCard>
 
-        <View style={shared.card}>
+        <GlassCard>
           <SectionHeader title="Links" />
           {field('GitHub URL', 'githubUrl')}
           {field('LinkedIn URL', 'linkedinUrl')}
           {field('Portfolio URL', 'portfolioUrl')}
           {listInput('Other links', 'otherLinks', 'https://..., https://...')}
-        </View>
+        </GlassCard>
 
-        <View style={shared.card}>
+        <GlassCard>
           <SectionHeader title="Job preferences" />
           {listInput('Skills', 'skills', 'React Native, TypeScript, Node')}
           {listInput('Preferred roles', 'preferredRoles', 'Software Developer, Mobile Engineer')}
@@ -299,10 +299,10 @@ export default function VaultScreen() {
           {toggle('Needs visa sponsorship', 'requiresSponsorship')}
           {toggle('Willing to relocate', 'willingToRelocate')}
           {toggle('Remote roles only', 'remoteOnly')}
-        </View>
+        </GlassCard>
 
         {/* ----------------------------- work history --------------------------- */}
-        <View style={shared.card}>
+        <GlassCard>
           <SectionHeader
             title="Work history"
             action="Add"
@@ -363,10 +363,10 @@ export default function VaultScreen() {
               </Pressable>
             </View>
           ))}
-        </View>
+        </GlassCard>
 
         {/* ------------------------------- projects ----------------------------- */}
-        <View style={shared.card}>
+        <GlassCard>
           <SectionHeader
             title="Projects"
             action="Add"
@@ -413,9 +413,9 @@ export default function VaultScreen() {
               </Pressable>
             </View>
           ))}
-        </View>
+        </GlassCard>
 
-        <View style={shared.card}>
+        <GlassCard>
           <SectionHeader title="Notes for the agent" />
           <Text style={[shared.dim, styles.intro]}>
             Answers to common application questions, why you are looking, references, anything else.
@@ -428,7 +428,7 @@ export default function VaultScreen() {
             style={styles.notes}
             onBlur={() => persist(vault)}
           />
-        </View>
+        </GlassCard>
 
         <Button label="Save vault" onPress={() => persist(vault)} loading={saving} />
         <View style={styles.bottomSpace} />

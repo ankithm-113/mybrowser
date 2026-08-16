@@ -13,7 +13,7 @@ import { useNavigation } from '@react-navigation/native';
 import Icon from '@/components/Icon';
 import { TAB_BAR_INSET } from '@/components/layout';
 import { colors, radius, shared, space, type } from '@/components/theme';
-import { Badge, Button, Chip, EmptyState } from '@/components/ui';
+import { Badge, Button, Chip, EmptyState, GlassCard } from '@/components/ui';
 import { dispatch, onRunComplete } from '@/services/agentBus';
 import { alert } from '@/services/dialog';
 import { getLastSweep, loadJobs, runJobSweep, updateJob } from '@/services/jobScheduler';
@@ -115,7 +115,7 @@ export default function JobReviewScreen() {
     const strongMatch = item.matchScore >= 75;
 
     return (
-      <View style={shared.card}>
+      <GlassCard>
         <View style={styles.jobHeader}>
           <View style={styles.flex}>
             <Text style={styles.jobTitle} numberOfLines={2}>
@@ -173,7 +173,7 @@ export default function JobReviewScreen() {
           <Text style={styles.openText}>Open posting in the browser</Text>
           <Icon name="arrowRight" size={14} color={colors.text} />
         </Pressable>
-      </View>
+      </GlassCard>
     );
   };
 

@@ -12,6 +12,7 @@ import {
   ViewStyle,
 } from 'react-native';
 
+import Glass from './Glass';
 import Icon, { IconName } from './Icon';
 import { colors, radius, space, type } from './theme';
 
@@ -278,6 +279,28 @@ export function SecretField({
   );
 }
 
+/* -------------------------------- GlassCard ------------------------------- */
+
+/**
+ * Frosted pane used for every content card. Reads as glass because the screen
+ * backdrop (colors.canvas) is a shade darker than the pane itself.
+ */
+export function GlassCard({
+  children,
+  style,
+}: {
+  children: React.ReactNode;
+  style?: ViewStyle;
+}) {
+  return (
+    <View style={[styles.glassCardShadow, style]}>
+      <Glass tone="light" intensity={60} radiusSize={radius.lg} style={styles.glassCardInner}>
+        {children}
+      </Glass>
+    </View>
+  );
+}
+
 /* -------------------------------- Structure ------------------------------- */
 
 export function SectionHeader({
@@ -382,6 +405,8 @@ const styles = StyleSheet.create({
   chipLabelSelected: { color: colors.onFill },
 
   flex: { flex: 1 },
+  glassCardShadow: { borderRadius: radius.lg, marginBottom: space.md },
+  glassCardInner: { padding: space.lg },
   fieldWrap: { marginBottom: space.md },
   fieldLabel: {
     ...type.label,

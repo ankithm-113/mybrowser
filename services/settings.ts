@@ -8,7 +8,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
   jobSweepTime: '21:00',
   jobSweepEnabled: true,
   jobQueries: ['Software Developer Remote', 'React Native Developer'],
-  jobSources: ['linkedin', 'indeed', 'glassdoor', 'wellfound'],
+  // Default to the sources that actually fetch jobs headlessly; the
+  // browser-only ones are opt-in since they only yield a search link.
+  jobSources: ['remoteok', 'arbeitnow', 'jobicy', 'himalayas', 'linkedin'],
+  customSources: [],
   minMatchScore: 65,
   maxAgentSteps: 25,
   autoApplyTopMatches: false,
@@ -19,6 +22,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
 export async function loadSettings(): Promise<AppSettings> {
   const stored = await readJson<Partial<AppSettings>>(KEYS.settings, {});
   const merged = { ...DEFAULT_SETTINGS, ...stored };
+  // Settings saved before custom sources existed have no array here.
+  merged.customSources = stored.customSources ?? [];
   merged.geminiKey = await getSecret('geminiKey');
   merged.groqKey = await getSecret('groqKey');
   merged.openrouterKey = await getSecret('openrouterKey');

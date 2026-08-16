@@ -15,10 +15,10 @@ import * as Notifications from 'expo-notifications';
 import * as TaskManager from 'expo-task-manager';
 import { Platform } from 'react-native';
 
-import { JobMatch } from '@/types';
+import { CustomJobSource, JobMatch } from '@/types';
 import { completeJson } from './apiManager';
 import { buildVaultContext, loadVault } from './knowledgeVault';
-import { JOB_SOURCES, RawJob, getSource, toJobMatch } from './jobSources';
+import { RawJob, getSource, resolveSources, toJobMatch } from './jobSources';
 import { JOB_MATCH_SYSTEM_PROMPT } from './prompts';
 import { loadSettings } from './settings';
 import { KEYS, readJson, writeJson } from './storage';
@@ -55,7 +55,11 @@ export interface SweepResult {
   ranAt: number;
 }
 
-async function fetchAllSources(queries: string[], sourceIds: string[]): Promise<{
+async function fetchAllSources(
+  queries: string[],
+  sourceIds: string[],
+  customs: CustomJobSource[] = []
+): Promise<{
   jobs: RawJob[];
   errors: string[];
 }> {
@@ -65,7 +69,7 @@ async function fetchAllSources(queries: string[], sourceIds: string[]): Promise<
 
   const tasks: Array<Promise<void>> = [];
   for (const sourceId of sourceIds) {
-    const source = getSource(sourceId);
+    const source = getSource(sourceId, customs);
     if (!source) continue;
     for (const query of queries) {
       tasks.push(
@@ -138,7 +142,11 @@ export async function runJobSweep(): Promise<SweepResult> {
   const vault = await loadVault();
   const vaultContext = buildVaultContext(vault, { includeResume: true });
 
-  const { jobs: raw, errors } = await fetchAllSources(settings.jobQueries, settings.jobSources);
+  const { jobs: raw, errors } = await fetchAllSources(
+    settings.jobQueries,
+    settings.jobSources,
+    settings.customSources
+  );
 
   const existing = await loadJobs();
   const known = new Set(existing.map((j) => j.id));
@@ -276,6 +284,33 @@ export async function configureScheduler(): Promise<{ notifications: boolean; ba
   return { notifications, backgroundFetch };
 }
 
-export function listSourceLabels(): Array<{ id: string; label: string; kind: string }> {
-  return JOB_SOURCES.map((s) => ({ id: s.id, label: s.label, kind: s.kind }));
+export function listSourceLabels(
+  customs: CustomJobSource[] = []
+): Array<{ id: string; label: string; kind: string; custom: boolean }> {
+  return resolveSources(customs).map((s) => ({
+    id: s.id,
+    label: s.label,
+    kind: s.kind,
+    custom: customs.some((c) => c.id === s.id),
+  }));
+}
+
+/** Fetches a single source once so the user can check a new feed works. */
+export async function testSource(
+  source: CustomJobSource,
+  query: string
+): Promise<{ ok: boolean; detail: string }> {
+  const built = getSource(source.id, [source]);
+  if (!built) return { ok: false, detail: 'Source could not be built.' };
+  try {
+    const jobs = await built.fetchJobs(query || 'developer');
+    return {
+      ok: true,
+      detail: `Found ${jobs.length} item${jobs.length === 1 ? '' : 's'}. First: ${
+        jobs[0]?.title ?? 'n/a'
+      }`,
+    };
+  } catch (err) {
+    return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+  }
 }

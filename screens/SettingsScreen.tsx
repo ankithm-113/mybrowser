@@ -18,6 +18,7 @@ import {
   Chip,
   Divider,
   Field,
+  GlassCard,
   SectionHeader,
   SecretField,
 } from '@/components/ui';
@@ -29,9 +30,11 @@ import {
   testAllProviders,
 } from '@/services/apiManager';
 import { alert } from '@/services/dialog';
-import { configureScheduler, listSourceLabels } from '@/services/jobScheduler';
+import { configureScheduler, listSourceLabels, testSource } from '@/services/jobScheduler';
+import { SOURCE_PRESETS } from '@/services/jobSources';
 import { DEFAULT_SETTINGS, loadSettings, saveSettings } from '@/services/settings';
-import { AppSettings, ProviderHealth, ProviderId } from '@/types';
+import { newId } from '@/services/storage';
+import { AppSettings, CustomJobSource, ProviderHealth, ProviderId } from '@/types';
 
 export default function SettingsScreen() {
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
@@ -43,7 +46,67 @@ export default function SettingsScreen() {
     {} as Record<ProviderId, ProviderTestResult>
   );
 
+  const [addingSource, setAddingSource] = useState(false);
+  const [testingSource, setTestingSource] = useState(false);
+  const [draft, setDraft] = useState<{ label: string; kind: 'rss' | 'browser'; url: string }>({
+    label: '',
+    kind: 'rss',
+    url: '',
+  });
+
   const refreshHealth = useCallback(async () => setHealth(await getProviderHealth()), []);
+
+  /* ---------------------------- custom job sources --------------------------- */
+
+  const addSource = useCallback(
+    (label: string, kind: 'rss' | 'browser', url: string) => {
+      const cleanLabel = label.trim();
+      const cleanUrl = url.trim();
+
+      if (!cleanLabel || !cleanUrl) {
+        void alert('Missing details', 'Give the source a name and a URL.');
+        return;
+      }
+      if (!/^https?:\/\//i.test(cleanUrl)) {
+        void alert('Invalid URL', 'The URL must start with http:// or https://');
+        return;
+      }
+
+      const source: CustomJobSource = { id: newId('src'), label: cleanLabel, kind, url: cleanUrl };
+      setSettings((s) => ({
+        ...s,
+        customSources: [...s.customSources, source],
+        // A source you just added is one you want used.
+        jobSources: [...s.jobSources, source.id],
+      }));
+      setDraft({ label: '', kind: 'rss', url: '' });
+      setAddingSource(false);
+    },
+    []
+  );
+
+  const removeSource = useCallback((id: string) => {
+    setSettings((s) => ({
+      ...s,
+      customSources: s.customSources.filter((c) => c.id !== id),
+      jobSources: s.jobSources.filter((x) => x !== id),
+    }));
+  }, []);
+
+  /** Fetches the draft feed once so a broken URL is caught before it's saved. */
+  const testDraft = useCallback(async () => {
+    if (!/^https?:\/\//i.test(draft.url.trim())) {
+      void alert('Invalid URL', 'The URL must start with http:// or https://');
+      return;
+    }
+    setTestingSource(true);
+    const result = await testSource(
+      { id: 'draft', label: draft.label.trim() || 'Draft', kind: draft.kind, url: draft.url.trim() },
+      settings.jobQueries[0] ?? 'developer'
+    );
+    setTestingSource(false);
+    void alert(result.ok ? 'Source works' : 'Source failed', result.detail);
+  }, [draft, settings.jobQueries]);
 
   useEffect(() => {
     (async () => {
@@ -169,7 +232,7 @@ export default function SettingsScreen() {
         <View style={styles.spacer} />
 
         {/* ------------------------------- provider ------------------------------ */}
-        <View style={shared.card}>
+        <GlassCard>
           <SectionHeader
             title="Provider status"
             action="Reset cooldowns"
@@ -243,10 +306,10 @@ export default function SettingsScreen() {
             Saves your keys, then sends a one-word prompt to each provider and shows the exact
             response. Full request logs also print to the Metro terminal.
           </Text>
-        </View>
+        </GlassCard>
 
         {/* --------------------------------- sweep ------------------------------- */}
-        <View style={shared.card}>
+        <GlassCard>
           <SectionHeader title="Nightly job sweep" />
 
           <View style={styles.toggleRow}>
@@ -297,7 +360,7 @@ export default function SettingsScreen() {
 
           <Text style={shared.label}>Sources</Text>
           <View style={styles.chipRow}>
-            {listSourceLabels().map((source) => (
+            {listSourceLabels(settings.customSources).map((source) => (
               <Chip
                 key={source.id}
                 label={source.label}
@@ -310,10 +373,115 @@ export default function SettingsScreen() {
             Indeed, Glassdoor and Wellfound block plain HTTP clients, so those produce a search link
             the in-app browser agent opens with a real session instead.
           </Text>
-        </View>
+        </GlassCard>
+
+        {/* ----------------------------- custom sources -------------------------- */}
+        <GlassCard>
+          <SectionHeader
+            title="Add job sources"
+            action={addingSource ? 'Cancel' : 'Add custom'}
+            onAction={() => setAddingSource((v) => !v)}
+          />
+
+          <Text style={[shared.dim, styles.introSpaced]}>
+            RSS feeds are fetched headlessly during the nightly sweep. Browser sources open a search
+            page for the agent to read. Put {'{query}'} in the URL to insert your search terms.
+          </Text>
+
+          <Text style={shared.label}>Quick add</Text>
+          <View style={styles.chipRow}>
+            {SOURCE_PRESETS.filter(
+              (p) => !settings.customSources.some((c) => c.label === p.label)
+            ).map((preset) => (
+              <Chip
+                key={preset.label}
+                label={`${preset.label} · ${preset.kind}`}
+                onPress={() => addSource(preset.label, preset.kind, preset.url)}
+              />
+            ))}
+          </View>
+
+          {addingSource && (
+            <View style={styles.addBox}>
+              <Field
+                label="Name"
+                value={draft.label}
+                onChangeText={(t) => setDraft((d) => ({ ...d, label: t }))}
+                placeholder="My job board"
+              />
+              <Text style={shared.label}>Type</Text>
+              <View style={styles.chipRow}>
+                <Chip
+                  label="RSS feed"
+                  selected={draft.kind === 'rss'}
+                  onPress={() => setDraft((d) => ({ ...d, kind: 'rss' }))}
+                />
+                <Chip
+                  label="Browser search"
+                  selected={draft.kind === 'browser'}
+                  onPress={() => setDraft((d) => ({ ...d, kind: 'browser' }))}
+                />
+              </View>
+              <Field
+                label="URL"
+                value={draft.url}
+                onChangeText={(t) => setDraft((d) => ({ ...d, url: t }))}
+                placeholder={
+                  draft.kind === 'rss'
+                    ? 'https://example.com/jobs.rss'
+                    : 'https://example.com/search?q={query}'
+                }
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+              <View style={styles.addActions}>
+                <Button
+                  label="Test"
+                  variant="secondary"
+                  onPress={testDraft}
+                  loading={testingSource}
+                  style={styles.flex}
+                  small
+                />
+                <Button
+                  label="Add source"
+                  onPress={() => addSource(draft.label, draft.kind, draft.url)}
+                  style={styles.flex}
+                  small
+                />
+              </View>
+            </View>
+          )}
+
+          {settings.customSources.length > 0 && (
+            <View>
+              <View style={styles.spacer} />
+              <Text style={shared.label}>Your sources</Text>
+              {settings.customSources.map((source, index) => (
+                <View key={source.id}>
+                  {index > 0 && <Divider />}
+                  <View style={styles.healthRow}>
+                    <View style={styles.flex}>
+                      <Text style={shared.bodyStrong}>{source.label}</Text>
+                      <Text style={shared.dim} numberOfLines={1}>
+                        {source.kind.toUpperCase()} · {source.url}
+                      </Text>
+                    </View>
+                    <Button
+                      label="Remove"
+                      variant="secondary"
+                      onPress={() => removeSource(source.id)}
+                      small
+                    />
+                  </View>
+                </View>
+              ))}
+            </View>
+          )}
+        </GlassCard>
 
         {/* ------------------------------- behaviour ----------------------------- */}
-        <View style={shared.card}>
+        <GlassCard>
           <SectionHeader title="Agent behaviour" />
 
           <Text style={shared.label}>Max steps per run</Text>
@@ -344,7 +512,7 @@ export default function SettingsScreen() {
               {...switchColors}
             />
           </View>
-        </View>
+        </GlassCard>
 
         <Button label="Save settings" onPress={save} loading={saving} />
         <View style={styles.bottomSpace} />
@@ -389,6 +557,16 @@ const styles = StyleSheet.create({
     fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace' }),
   },
   testHint: { marginTop: space.sm },
+  introSpaced: { marginBottom: space.lg },
+  addBox: {
+    backgroundColor: colors.sunkenAlt,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: space.md,
+    marginTop: space.sm,
+  },
+  addActions: { flexDirection: 'row', gap: space.sm, marginTop: space.sm },
   toggleRow: {
     flexDirection: 'row',
     alignItems: 'center',

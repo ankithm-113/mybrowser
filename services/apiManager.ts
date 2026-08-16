@@ -11,6 +11,7 @@
 import { LLMMessage, LLMResult, ProviderHealth, ProviderId } from '@/types';
 import { KEYS, readJson, writeJson } from './storage';
 import { createLogger, describeKey } from './logger';
+import { getGeminiModels } from './geminiModels';
 import { getFreeModels } from './openrouterModels';
 import { loadSettings } from './settings';
 
@@ -26,8 +27,9 @@ interface ProviderSpec {
 export const PROVIDERS: ProviderSpec[] = [
   {
     id: 'gemini',
-    label: 'Gemini 2.5 Flash-Lite',
-    models: ['gemini-2.5-flash-lite', 'gemini-2.0-flash-lite'],
+    // Resolved at call time from ListModels; see geminiModels.ts.
+    label: 'Google Gemini',
+    models: [],
     keyField: 'geminiKey',
   },
   {
@@ -45,10 +47,15 @@ export const PROVIDERS: ProviderSpec[] = [
   },
 ];
 
-/** Free OpenRouter slugs change often, so resolve them per call. */
+/**
+ * Model ids rot: Google retires Gemini aliases and OpenRouter moves models off
+ * its free tier, both without warning. Both are resolved from the provider's
+ * own catalogue at call time (cached for a day) rather than hardcoded.
+ */
 async function resolveModels(provider: ProviderSpec, key: string): Promise<string[]> {
-  if (provider.id !== 'openrouter') return provider.models;
-  return getFreeModels(key);
+  if (provider.id === 'openrouter') return getFreeModels(key);
+  if (provider.id === 'gemini') return getGeminiModels(key);
+  return provider.models;
 }
 
 const DEFAULT_COOLDOWN_MS = 60_000;

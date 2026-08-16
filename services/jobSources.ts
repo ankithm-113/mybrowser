@@ -8,7 +8,7 @@
  * each one fails soft and the sweep continues with whatever else responded.
  */
 
-import { JobMatch } from '@/types';
+import { CustomJobSource, JobMatch } from '@/types';
 import { newId } from './storage';
 
 export interface RawJob {
@@ -268,9 +268,140 @@ export const JOB_SOURCES: JobSource[] = [
   wellfound,
 ];
 
-export function getSource(id: string): JobSource | undefined {
-  return JOB_SOURCES.find((s) => s.id === id);
+/* ----------------------------- custom sources ----------------------------- */
+
+function decodeEntities(text: string): string {
+  return text
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;|&#39;/g, "'")
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&#(\d+);/g, (_, d) => String.fromCharCode(Number(d)))
+    .replace(/&amp;/g, '&'); // last, so &amp;lt; resolves correctly
 }
+
+/**
+ * Pull one tag's text out of an RSS/Atom item.
+ *
+ * Feed descriptions routinely carry HTML that is *entity-escaped* inside the
+ * XML, so stripping tags before decoding leaves literal "&lt;p&gt;" in the
+ * text. Decode first, then strip, then decode once more to catch the
+ * double-encoding some generators emit.
+ */
+function tagText(xml: string, tag: string): string | undefined {
+  const match = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`, 'i').exec(xml);
+  if (!match) return undefined;
+
+  const raw = match[1].replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1');
+  return stripHtml(decodeEntities(stripHtml(decodeEntities(raw)))) || undefined;
+}
+
+/** Atom carries the URL in an attribute rather than the element body. */
+function atomLink(xml: string): string | undefined {
+  return /<link[^>]*href="([^"]+)"/i.exec(xml)?.[1];
+}
+
+/**
+ * Minimal RSS 2.0 + Atom reader. Deliberately regex-based: pulling in an XML
+ * parser for four fields is not worth the dependency, and job feeds are
+ * uniformly simple documents.
+ */
+export function parseFeed(xml: string, sourceLabel: string, sourceId: string): RawJob[] {
+  const blocks = xml.match(/<(item|entry)[\s\S]*?<\/(item|entry)>/gi) ?? [];
+
+  return blocks
+    .slice(0, PER_SOURCE_LIMIT)
+    .map((block, index): RawJob | null => {
+      const title = tagText(block, 'title');
+      const link = tagText(block, 'link') || atomLink(block);
+      if (!title || !link) return null;
+
+      const description =
+        tagText(block, 'description') ?? tagText(block, 'summary') ?? tagText(block, 'content');
+
+      return {
+        // Prefer the feed's own id so repeat sweeps dedupe correctly.
+        id: `${sourceId}:${tagText(block, 'guid') ?? tagText(block, 'id') ?? link ?? index}`,
+        title,
+        // Feeds rarely separate out the company; fall back to the source name.
+        company: tagText(block, 'dc:creator') ?? tagText(block, 'author') ?? sourceLabel,
+        location: tagText(block, 'location') ?? '',
+        url: link,
+        source: sourceLabel,
+        postedAt: tagText(block, 'pubDate') ?? tagText(block, 'updated'),
+        snippet: description?.slice(0, 600),
+      };
+    })
+    .filter((j): j is RawJob => j !== null);
+}
+
+function buildCustomSource(custom: CustomJobSource): JobSource {
+  return {
+    id: custom.id,
+    label: custom.label,
+    kind: custom.kind === 'rss' ? 'api' : 'html',
+    async fetchJobs(query) {
+      const url = custom.url.replace(/\{query\}/gi, encodeURIComponent(query));
+
+      if (custom.kind === 'browser') {
+        return [
+          {
+            id: `${custom.id}:search:${query}`,
+            title: `Open ${custom.label} search: ${query}`,
+            company: custom.label,
+            location: 'Search page',
+            url,
+            source: custom.label,
+            snippet: `Opens the live ${custom.label} search in the in-app browser for the agent to read.`,
+          },
+        ];
+      }
+
+      const res = await getWithTimeout(url, { Accept: 'application/rss+xml, application/xml' });
+      if (!res.ok) throw new Error(`${custom.label} HTTP ${res.status}`);
+      const jobs = parseFeed(await res.text(), custom.label, custom.id);
+      if (!jobs.length) throw new Error(`${custom.label} returned no parseable feed items`);
+      return jobs;
+    },
+  };
+}
+
+/** Built-in sources plus the user's own, in one list. */
+export function resolveSources(customs: CustomJobSource[] = []): JobSource[] {
+  return [...JOB_SOURCES, ...customs.map(buildCustomSource)];
+}
+
+export function getSource(id: string, customs: CustomJobSource[] = []): JobSource | undefined {
+  return resolveSources(customs).find((s) => s.id === id);
+}
+
+/** Ready-made feeds the user can add with one tap. */
+export const SOURCE_PRESETS: Array<Omit<CustomJobSource, 'id'>> = [
+  { label: 'We Work Remotely', kind: 'rss', url: 'https://weworkremotely.com/remote-jobs.rss' },
+  {
+    label: 'WWR Programming',
+    kind: 'rss',
+    url: 'https://weworkremotely.com/categories/remote-programming-jobs.rss',
+  },
+  {
+    label: 'WWR Full-Stack',
+    kind: 'rss',
+    url: 'https://weworkremotely.com/categories/remote-full-stack-programming-jobs.rss',
+  },
+  { label: 'Jobicy Feed', kind: 'rss', url: 'https://jobicy.com/?feed=job_feed' },
+  { label: 'Naukri', kind: 'browser', url: 'https://www.naukri.com/{query}-jobs' },
+  {
+    label: 'Google Jobs',
+    kind: 'browser',
+    url: 'https://www.google.com/search?q={query}+jobs&ibp=htl;jobs',
+  },
+  {
+    label: 'Y Combinator',
+    kind: 'browser',
+    url: 'https://www.ycombinator.com/jobs?query={query}',
+  },
+];
 
 export function toJobMatch(raw: RawJob, score: number, reason: string): JobMatch {
   return {

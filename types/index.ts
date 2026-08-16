@@ -234,6 +234,20 @@ export interface ProviderHealth {
 
 /* -------------------------------- Settings ------------------------------- */
 
+/** A job feed the user added themselves. */
+export interface CustomJobSource {
+  id: string;
+  label: string;
+  /**
+   * `rss` is fetched and parsed headlessly during the nightly sweep.
+   * `browser` cannot be fetched (Cloudflare, login walls), so it yields a
+   * search link the in-app agent opens with a real browser session.
+   */
+  kind: 'rss' | 'browser';
+  /** May contain {query}, substituted with each of your search queries. */
+  url: string;
+}
+
 export interface AppSettings {
   geminiKey: string;
   groqKey: string;
@@ -242,7 +256,9 @@ export interface AppSettings {
   jobSweepTime: string;
   jobSweepEnabled: boolean;
   jobQueries: string[];
+  /** Enabled source ids — built-in ids and custom source ids alike. */
   jobSources: string[];
+  customSources: CustomJobSource[];
   minMatchScore: number;
   maxAgentSteps: number;
   autoApplyTopMatches: boolean;

@@ -25,8 +25,13 @@ export const palette = {
 } as const;
 
 export const colors = {
-  /** Page background. */
+  /** Base white, used for the browser and anywhere glass must not tint. */
   bg: palette.white,
+  /**
+   * Screen backdrop. Deliberately a shade off white: frosted panes are
+   * invisible on a pure white page, so the cards need a field to sit against.
+   */
+  canvas: palette.gray100,
   /** Raised card on the page. */
   surface: palette.white,
   /** Recessed field / chip background. */
@@ -116,7 +121,7 @@ export const switchColors = {
 } as const;
 
 export const shared = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.bg },
+  screen: { flex: 1, backgroundColor: colors.canvas },
 
   pad: { padding: space.lg },
   row: { flexDirection: 'row', alignItems: 'center' },
