@@ -1,0 +1,66 @@
+{
+  "expo": {
+    "name": "AI Browser Agent",
+    "slug": "ai-browser-agent",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "scheme": "aibrowseragent",
+    "splash": {
+      "resizeMode": "contain",
+      "backgroundColor": "#FFFFFF"
+    },
+    "androidStatusBar": {
+      "barStyle": "dark-content",
+      "backgroundColor": "#FFFFFF",
+      "translucent": false
+    },
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.aibrowseragent.app",
+      "infoPlist": {
+        "UIBackgroundModes": ["fetch", "processing", "remote-notification"],
+        "NSMicrophoneUsageDescription": "Used for voice commands to the AI agent.",
+        "NSSpeechRecognitionUsageDescription": "Used to transcribe your spoken commands into agent tasks.",
+        "NSDocumentsFolderUsageDescription": "Used to import your resume and portfolio documents."
+      }
+    },
+    "android": {
+      "package": "com.aibrowseragent.app",
+      "adaptiveIcon": {
+        "backgroundColor": "#FFFFFF"
+      },
+      "permissions": [
+        "INTERNET",
+        "RECORD_AUDIO",
+        "READ_EXTERNAL_STORAGE",
+        "RECEIVE_BOOT_COMPLETED",
+        "WAKE_LOCK",
+        "SCHEDULE_EXACT_ALARM",
+        "POST_NOTIFICATIONS"
+      ]
+    },
+    "plugins": [
+      "expo-document-picker",
+      "expo-secure-store",
+      [
+        "expo-notifications",
+        {
+          "color": "#0A0A0A"
+        }
+      ],
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Allow AI Browser Agent to use the microphone.",
+          "speechRecognitionPermission": "Allow AI Browser Agent to use speech recognition.",
+          "androidSpeechServicePackages": ["com.google.android.googlequicksearchbox"]
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {}
+    }
+  }
+}
