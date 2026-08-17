@@ -40,6 +40,9 @@ const DEFAULT_TIME_BUDGET_MS = 15 * 60_000;
 /** Consecutive failed turns tolerated before giving up. */
 const MAX_CONSECUTIVE_FAILURES = 6;
 
+/** Unsupported "I'm done" claims tolerated before reporting the run honestly. */
+const MAX_UNVERIFIED_COMPLETIONS = 4;
+
 /** Soft pause after a failure, so the page can finish whatever it was doing. */
 const RETRY_BACKOFF_MS = [2000, 3000, 4000, 5000, 6000, 8000];
 
@@ -132,6 +135,79 @@ function detectBlockedPage(snapshot: PageSnapshot): string | null {
     : `This page looks like a block or challenge page.\n\n${snapshot.url}\n\nResolve it on screen, then press Resume Agent.`;
 }
 
+/** Tasks whose completion claim we verify against the page before believing it. */
+const APPLICATION_TASK = /\bapply\b|application|job|role|position|submit .*(form|application)/i;
+
+/** Wording sites actually use once an application is genuinely in. */
+const CONFIRMATION_PATTERNS = [
+  /application (was )?(submitted|received|complete|sent)/i,
+  /thank you for (applying|your application|your interest)/i,
+  /we(.|')?ve received your application/i,
+  /successfully (applied|submitted)/i,
+  /your application (has been|was) (sent|submitted|received)/i,
+  /submission (received|confirmed|successful)/i,
+  /applied on|application id|confirmation number/i,
+];
+
+/** Still-present controls that prove the application is not finished. */
+const UNFINISHED_PATTERNS = [
+  /\beasy apply\b/i,
+  /^apply(\s|$)/i,
+  /start (your )?application/i,
+  /continue to application/i,
+];
+
+/**
+ * The agent is prone to declaring victory the moment an Apply click succeeds —
+ * but on LinkedIn that click only opens the Easy Apply modal, or hands off to
+ * the company's career portal. Neither is a submitted application, so a
+ * completion claim has to be corroborated by the page itself.
+ */
+function verifyCompletion(
+  snapshot: PageSnapshot,
+  task: string
+): { verified: boolean; reason?: string } {
+  if (!APPLICATION_TASK.test(task)) return { verified: true };
+
+  const text = snapshot.text.slice(0, 4000);
+  if (CONFIRMATION_PATTERNS.some((p) => p.test(text))) return { verified: true };
+
+  const applyControl = snapshot.elements.find((e) =>
+    UNFINISHED_PATTERNS.some((p) => p.test(`${e.text ?? ''} ${e.label ?? ''}`.trim()))
+  );
+  if (applyControl) {
+    return {
+      verified: false,
+      reason:
+        `The page still shows an "${(applyControl.text ?? applyControl.label ?? 'Apply').trim()}" control ` +
+        `(${applyControl.agentId}), so the application has NOT been submitted. Clicking Apply only opens the ` +
+        `form — either the Easy Apply dialog, or the company's career portal. Open it, fill every field, and ` +
+        `submit it there.`,
+    };
+  }
+
+  const emptyRequired = snapshot.elements.filter(
+    (e) => e.required && (e.kind === 'input' || e.kind === 'textarea') && !e.value
+  );
+  if (emptyRequired.length) {
+    return {
+      verified: false,
+      reason: `${emptyRequired.length} required field(s) are still empty (${emptyRequired
+        .slice(0, 4)
+        .map((e) => e.agentId)
+        .join(', ')}). The application cannot have been submitted.`,
+    };
+  }
+
+  return {
+    verified: false,
+    reason:
+      'Nothing on this page confirms the application was submitted — no confirmation message, ' +
+      'reference number, or thank-you text. Do not claim completion yet: look for the real submit ' +
+      'button, or scroll to find the confirmation.',
+  };
+}
+
 function describeAction(a: AgentAction): string {
   switch (a.type) {
     case 'fill':
@@ -196,6 +272,7 @@ export async function runAgent(options: RunOptions): Promise<AgentRunResult> {
   let lastResults: string | undefined;
   let previousError: string | undefined;
   let consecutiveFailures = 0;
+  let unverifiedCompletions = 0;
 
   const status = (patch: Partial<AgentStatus>, step: number) =>
     onStatus?.({
@@ -332,8 +409,33 @@ export async function runAgent(options: RunOptions): Promise<AgentRunResult> {
     }
 
     if (decision.isTaskComplete) {
-      status({ phase: 'done', message: decision.summary ?? 'Task complete.', provider }, step);
-      return finish(true, decision.summary ?? decision.thought ?? 'Task complete.', step);
+      const check = verifyCompletion(snapshot, options.task);
+
+      if (check.verified) {
+        status({ phase: 'done', message: decision.summary ?? 'Task complete.', provider }, step);
+        return finish(true, decision.summary ?? decision.thought ?? 'Task complete.', step);
+      }
+
+      unverifiedCompletions += 1;
+      log.warn(`step ${step}: rejected completion claim — ${check.reason}`);
+
+      // Give it a few chances to actually finish, then report honestly rather
+      // than either looping forever or rubber-stamping an unsent application.
+      if (unverifiedCompletions >= MAX_UNVERIFIED_COMPLETIONS) {
+        return finish(
+          false,
+          `The agent reported success but the page never confirmed it. ${check.reason} ` +
+            `Check the page yourself before assuming this was submitted.`,
+          step
+        );
+      }
+
+      previousError =
+        `You claimed the task was complete, but that is not supported by the page. ${check.reason} ` +
+        `Continue working: isTaskComplete must stay false until the site itself confirms submission.`;
+      status({ phase: 'acting', message: 'Verifying the application was really submitted...' }, step);
+      await executor.waitForStable(500, 6000);
+      continue;
     }
 
     /* ------------------------------- act -------------------------------------- */

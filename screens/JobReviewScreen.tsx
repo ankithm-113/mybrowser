@@ -87,9 +87,13 @@ export default function JobReviewScreen() {
         `Apply to this job on behalf of the user.\n` +
         `Role: ${job.title}\nCompany: ${job.company}\nLocation: ${job.location}\n` +
         `Posting URL: ${job.url}\n\n` +
-        `Find and open the application form (it may be behind an "Apply" button or on an ATS such as ` +
-        `Greenhouse, Lever, Workday or Ashby). Fill every field from the user's profile, attach the ` +
-        `primary resume to any file upload, and answer screening questions truthfully from the vault. ` +
+        `Find and open the application form. Clicking Apply is only the first step: "Easy Apply" opens a ` +
+        `multi-step dialog on the page, while a plain "Apply" hands off to a career portal such as ` +
+        `Greenhouse, Lever, Workday or Ashby — in both cases you must complete the form that appears. ` +
+        `Fill every field from the user's profile, attach the primary resume to any file upload, and answer ` +
+        `screening questions truthfully from the vault.\n\n` +
+        `The task is complete ONLY when the site confirms submission (a "thank you", an "application ` +
+        `submitted" message, or a reference number). Reaching the form or clicking Apply is not applying. ` +
         `Stop and ask the user if you hit a login wall, a CAPTCHA, or a question the vault cannot answer.`;
 
       void dispatch({ task, url: job.url, jobId: job.id });
