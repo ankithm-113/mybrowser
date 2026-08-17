@@ -34,7 +34,28 @@ import { configureScheduler, listSourceLabels, testSource } from '@/services/job
 import { SOURCE_PRESETS } from '@/services/jobSources';
 import { DEFAULT_SETTINGS, loadSettings, saveSettings } from '@/services/settings';
 import { newId } from '@/services/storage';
-import { AppSettings, CustomJobSource, ProviderHealth, ProviderId } from '@/types';
+import { AppSettings, AutonomyMode, CustomJobSource, ProviderHealth, ProviderId } from '@/types';
+
+const AUTONOMY_MODES: Array<{ id: AutonomyMode; label: string; description: string }> = [
+  {
+    id: 'guided',
+    label: 'Guided',
+    description:
+      'Asks before sending an application, posting a message, or paying. Most control, most interruptions.',
+  },
+  {
+    id: 'semi',
+    label: 'Semi-auto',
+    description:
+      'Fills and submits applications and forms on its own. Still asks before anything that spends money or books something.',
+  },
+  {
+    id: 'full',
+    label: 'Full auto',
+    description:
+      'Never asks, including for payments and purchases. Only use this on sites where a mistake costs you nothing.',
+  },
+];
 
 export default function SettingsScreen() {
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
@@ -499,19 +520,24 @@ export default function SettingsScreen() {
           <Divider />
           <View style={styles.spacer} />
 
-          <View style={styles.toggleRow}>
-            <View style={styles.flex}>
-              <Text style={shared.bodyStrong}>Ask before submitting</Text>
-              <Text style={shared.dim}>
-                Prompts you before the agent clicks anything that looks like a final submit.
-              </Text>
-            </View>
-            <Switch
-              value={settings.confirmBeforeSubmit}
-              onValueChange={(v) => set('confirmBeforeSubmit', v)}
-              {...switchColors}
-            />
+          <Text style={shared.label}>Autonomy</Text>
+          <View style={styles.chipRow}>
+            {AUTONOMY_MODES.map((mode) => (
+              <Chip
+                key={mode.id}
+                label={mode.label}
+                selected={settings.autonomy === mode.id}
+                onPress={() => set('autonomy', mode.id)}
+              />
+            ))}
           </View>
+          <Text style={shared.dim}>
+            {AUTONOMY_MODES.find((m) => m.id === settings.autonomy)?.description}
+          </Text>
+          <Text style={[shared.dim, styles.autonomyNote]}>
+            In every mode the agent still stops for logins, captchas and OTP codes, and never
+            invents an answer it cannot find in your vault.
+          </Text>
         </GlassCard>
 
         <Button label="Save settings" onPress={save} loading={saving} />
@@ -557,6 +583,7 @@ const styles = StyleSheet.create({
     fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace' }),
   },
   testHint: { marginTop: space.sm },
+  autonomyNote: { marginTop: space.sm },
   introSpaced: { marginBottom: space.lg },
   addBox: {
     backgroundColor: colors.sunkenAlt,

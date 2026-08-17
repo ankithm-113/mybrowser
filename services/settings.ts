@@ -17,7 +17,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   // the real stopping condition.
   maxAgentSteps: 30,
   autoApplyTopMatches: false,
-  confirmBeforeSubmit: true,
+  // Applications and forms run unattended; only money still asks.
+  autonomy: 'semi',
 };
 
 /** Non-secret settings from AsyncStorage merged with keys from SecureStore. */
@@ -26,6 +27,14 @@ export async function loadSettings(): Promise<AppSettings> {
   const merged = { ...DEFAULT_SETTINGS, ...stored };
   // Settings saved before custom sources existed have no array here.
   merged.customSources = stored.customSources ?? [];
+
+  // Migrate the old confirmBeforeSubmit boolean. Someone who had turned
+  // confirmations off wanted no prompts, so keep that; everyone else lands on
+  // semi, which still stops for payments.
+  if (!stored.autonomy) {
+    const legacy = (stored as { confirmBeforeSubmit?: boolean }).confirmBeforeSubmit;
+    merged.autonomy = legacy === false ? 'full' : 'semi';
+  }
   merged.geminiKey = await getSecret('geminiKey');
   merged.groqKey = await getSecret('groqKey');
   merged.openrouterKey = await getSecret('openrouterKey');

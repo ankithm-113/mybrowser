@@ -275,5 +275,13 @@ export interface AppSettings {
   minMatchScore: number;
   maxAgentSteps: number;
   autoApplyTopMatches: boolean;
-  confirmBeforeSubmit: boolean;
+  autonomy: AutonomyMode;
 }
+
+/**
+ * How much the agent checks with you before acting.
+ * - guided: confirm any submit, application send, or payment
+ * - semi:   run applications and forms unattended, confirm only money
+ * - full:   never ask; the agent still stops at logins and captchas
+ */
+export type AutonomyMode = 'guided' | 'semi' | 'full';

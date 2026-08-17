@@ -15,6 +15,7 @@
 import {
   AgentAction,
   AgentDecision,
+  AutonomyMode,
   AgentRunLogEntry,
   AgentRunResult,
   AgentStatus,
@@ -60,7 +61,45 @@ export interface RunOptions {
   signal?: AbortSignal;
 }
 
-const SUBMIT_HINTS = /submit|apply now|place order|pay|checkout|confirm|book now|send application/i;
+/** Sends something on your behalf, but costs nothing. */
+const SUBMIT_HINTS =
+  /submit|apply now|send application|send message|save and (continue|submit)|finish|post\b/i;
+
+/** Spends money or books something that is awkward to undo. */
+const IRREVERSIBLE_HINTS =
+  /\bpay\b|payment|checkout|place order|buy now|purchase|complete (order|purchase)|confirm (booking|order|payment)|billing|subscribe/i;
+
+/**
+ * The text a human would read on the control the agent is about to click.
+ *
+ * Matching against the whole page instead of the target is what made the
+ * confirmation prompt fire on nearly every click: any application page
+ * contains the words "confirm" or "pay" somewhere.
+ */
+function targetLabel(action: AgentAction, snapshot: PageSnapshot): string {
+  const element = snapshot.elements.find((e) => e.agentId === action.targetAgentId);
+  if (!element) return action.targetAgentId ?? '';
+  return [element.text, element.label, element.name, element.agentId]
+    .filter(Boolean)
+    .join(' ');
+}
+
+/** Whether this batch needs a human nod, given the configured autonomy. */
+function needsConfirmation(
+  actions: AgentAction[],
+  snapshot: PageSnapshot,
+  mode: AutonomyMode
+): boolean {
+  if (mode === 'full') return false;
+  const clicks = actions.filter((a) => a.type === 'click');
+  if (!clicks.length) return false;
+
+  return clicks.some((a) => {
+    const label = targetLabel(a, snapshot);
+    if (IRREVERSIBLE_HINTS.test(label)) return true;
+    return mode === 'guided' && SUBMIT_HINTS.test(label);
+  });
+}
 
 /** Pages that need a human before the agent can do anything useful. */
 const BLOCKED_PAGE_PATTERNS = [
@@ -331,18 +370,10 @@ export async function runAgent(options: RunOptions): Promise<AgentRunResult> {
       continue;
     }
 
-    if (
-      settings.confirmBeforeSubmit &&
-      options.confirmSubmit &&
-      actions.some(
-        (a) =>
-          a.type === 'click' &&
-          (SUBMIT_HINTS.test(a.targetAgentId ?? '') || SUBMIT_HINTS.test(snapshot.text))
-      )
-    ) {
-      status({ phase: 'waiting_user', message: 'Waiting for you to confirm submission...' }, step);
+    if (options.confirmSubmit && needsConfirmation(actions, snapshot, settings.autonomy)) {
+      status({ phase: 'waiting_user', message: 'Waiting for you to confirm...' }, step);
       const approved = await options.confirmSubmit(decision);
-      if (!approved) return finish(false, 'You declined the submission.', step);
+      if (!approved) return finish(false, 'You declined the action.', step);
     }
 
     status({ phase: 'acting', message: phaseMessageFor(decision), provider }, step);
