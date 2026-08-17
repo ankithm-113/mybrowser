@@ -30,6 +30,8 @@ export interface AgentElement {
   options?: string[];
   /** Trimmed visible text (buttons / links / labels). */
   text?: string;
+  /** True when the element lives inside an iframe or shadow root. */
+  inFrame?: boolean;
 }
 
 export interface PageSnapshot {
@@ -40,6 +42,8 @@ export interface PageSnapshot {
   elements: AgentElement[];
   scrollY: number;
   scrollHeight: number;
+  /** Cross-origin iframes the agent cannot read into. */
+  blockedFrames?: number;
   capturedAt: number;
 }
 
@@ -55,7 +59,8 @@ export type AgentActionType =
   | 'navigate'
   | 'wait'
   | 'key'
-  | 'extract';
+  | 'extract'
+  | 'waitFor';
 
 export interface AgentAction {
   type: AgentActionType;
@@ -67,6 +72,8 @@ export interface AgentAction {
   /** For `scroll`: pixels (default one viewport). For `wait`: milliseconds. */
   amount?: number;
   url?: string;
+  /** How long the page should wait for this target before failing (ms). */
+  waitTimeout?: number;
 }
 
 /** The strict JSON contract the LLM must return every turn. */
@@ -74,9 +81,13 @@ export interface AgentDecision {
   thought: string;
   actions: AgentAction[];
   isTaskComplete: boolean;
+  /** Pause before acting, for content the agent can see is still rendering. */
+  waitMilliseconds?: number;
+  /** Short progress line for the overlay, e.g. "Filling field 2 of 5...". */
+  statusMessage?: string;
   /** Present when isTaskComplete is true, or when the agent needs to report data. */
   summary?: string;
-  /** Set when the agent cannot continue without the user (captcha, OTP, payment). */
+  /** Set when the agent cannot continue without the user (login, captcha, OTP). */
   needsUser?: string;
 }
 

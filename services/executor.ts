@@ -27,8 +27,14 @@ type Pending<T> = {
   timer: ReturnType<typeof setTimeout>;
 };
 
-const ACTION_TIMEOUT_MS = 20_000;
-const SNAPSHOT_TIMEOUT_MS = 15_000;
+/**
+ * Generous, because the page itself now waits — up to 10s for each element to
+ * appear, plus a settle window after every mutating action. A tight native
+ * timeout here would defeat that waiting entirely.
+ */
+const ACTION_TIMEOUT_MS = 90_000;
+const SNAPSHOT_TIMEOUT_MS = 20_000;
+const SETTLE_TIMEOUT_MS = 15_000;
 /** WebView file payloads above this get rejected rather than freezing the bridge. */
 const MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
 
@@ -37,10 +43,16 @@ export class Executor {
   private requestCounter = 0;
   private pendingActions = new Map<string, Pending<ActionOutcome[]>>();
   private pendingSnapshots = new Map<string, Pending<PageSnapshot>>();
+  private pendingWaits = new Map<string, Pending<boolean>>();
+  private pendingSettles = new Map<string, Pending<PageSnapshot>>();
+
+  /** Set by Browser.tsx when the page reports an SPA route change. */
+  lastUrlChangeAt = 0;
 
   /** Latest snapshot pushed by the page's MutationObserver. */
   latestSnapshot: PageSnapshot | null = null;
   onSnapshot: ((snapshot: PageSnapshot) => void) | null = null;
+  onUrlChange: ((url: string) => void) | null = null;
 
   attach(transport: WebViewTransport | null): void {
     this.transport = transport;
@@ -93,11 +105,98 @@ export class Executor {
         this.pendingActions.delete(msg.requestId);
         pending.resolve(msg.results as ActionOutcome[]);
       }
+      return;
     }
+
+    if (msg.channel === 'waitResult' && msg.requestId) {
+      const pending = this.pendingWaits.get(msg.requestId);
+      if (pending) {
+        clearTimeout(pending.timer);
+        this.pendingWaits.delete(msg.requestId);
+        pending.resolve(!!msg.found);
+      }
+      return;
+    }
+
+    if (msg.channel === 'settleResult' && msg.requestId) {
+      const pending = this.pendingSettles.get(msg.requestId);
+      if (pending) {
+        clearTimeout(pending.timer);
+        this.pendingSettles.delete(msg.requestId);
+        if (msg.snapshot) this.latestSnapshot = msg.snapshot as PageSnapshot;
+        pending.resolve(this.latestSnapshot as PageSnapshot);
+      }
+      return;
+    }
+
+    // An SPA route change fires no load event; the page tells us instead.
+    if (msg.channel === 'urlchange') {
+      this.lastUrlChangeAt = Date.now();
+      this.onUrlChange?.(msg.url as string);
+    }
+  }
+
+  /**
+   * Asks the page to wait for an element to enter the DOM. Used by the loop
+   * before reporting a target as missing, so a slow-rendering widget is not
+   * mistaken for a broken plan.
+   */
+  async waitForElement(agentId: string, timeout = 10_000): Promise<boolean> {
+    const requestId = this.nextId();
+    return new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => {
+        this.pendingWaits.delete(requestId);
+        resolve(false);
+      }, timeout + SETTLE_TIMEOUT_MS);
+
+      this.pendingWaits.set(requestId, { resolve, reject: () => resolve(false), timer });
+      try {
+        this.send({ op: 'waitFor', requestId, agentId, timeout });
+      } catch {
+        clearTimeout(timer);
+        this.pendingWaits.delete(requestId);
+        resolve(false);
+      }
+    });
+  }
+
+  /** Waits for the DOM to go quiet, then returns the resulting snapshot. */
+  async waitForStable(quietMs = 500, maxMs = 8000): Promise<PageSnapshot | null> {
+    const requestId = this.nextId();
+    return new Promise<PageSnapshot | null>((resolve) => {
+      const timer = setTimeout(() => {
+        this.pendingSettles.delete(requestId);
+        resolve(this.latestSnapshot);
+      }, maxMs + SETTLE_TIMEOUT_MS);
+
+      this.pendingSettles.set(requestId, {
+        resolve: resolve as (v: PageSnapshot) => void,
+        reject: () => resolve(this.latestSnapshot),
+        timer,
+      });
+      try {
+        this.send({ op: 'settle', requestId, quietMs, maxMs });
+      } catch {
+        clearTimeout(timer);
+        this.pendingSettles.delete(requestId);
+        resolve(this.latestSnapshot);
+      }
+    });
   }
 
   /** Drops every in-flight request — used on navigation and on abort. */
   reset(reason = 'page navigated'): void {
+    for (const [, pending] of this.pendingWaits) {
+      clearTimeout(pending.timer);
+      pending.resolve(false);
+    }
+    for (const [, pending] of this.pendingSettles) {
+      clearTimeout(pending.timer);
+      pending.reject(new Error(reason));
+    }
+    this.pendingWaits.clear();
+    this.pendingSettles.clear();
+
     for (const [, pending] of this.pendingActions) {
       clearTimeout(pending.timer);
       pending.reject(new Error(reason));

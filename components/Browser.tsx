@@ -81,6 +81,8 @@ const Browser = forwardRef<BrowserHandle, Props>(({ onRunFinished }, ref) => {
   const [showTabs, setShowTabs] = useState(false);
   const [status, setStatus] = useState<AgentStatus>(IDLE_STATUS);
   const [lastThought, setLastThought] = useState<string>();
+  const [pausedReason, setPausedReason] = useState<string | null>(null);
+  const resumeRef = useRef<((proceed: boolean) => void) | null>(null);
 
   const activeTab = useMemo(
     () => tabs.find((t) => t.id === activeTabId) ?? tabs[0],
@@ -93,6 +95,12 @@ const Browser = forwardRef<BrowserHandle, Props>(({ onRunFinished }, ref) => {
     executor.attach({
       injectJavaScript: (script: string) => webRef.current?.injectJavaScript(script),
     });
+    // SPA route changes fire no load event; the page reports them instead so
+    // the address bar and the agent both see the new URL.
+    executor.onUrlChange = (url: string) => {
+      setCurrentUrl(url);
+      setAddressText(url);
+    };
   }, []);
 
   const handleMessage = useCallback((event: { nativeEvent: { data: string } }) => {
@@ -110,8 +118,10 @@ const Browser = forwardRef<BrowserHandle, Props>(({ onRunFinished }, ref) => {
           t.id === activeTabId ? { ...t, url: nav.url, title: nav.title || t.title } : t
         )
       );
-      // Any in-flight bridge request belongs to the page we just left.
-      executor.reset('page navigated');
+      // Only a real document load invalidates in-flight bridge requests. SPA
+      // route changes fire this too, and resetting on those would cancel the
+      // waits the agent depends on mid-run.
+      if (nav.loading) executor.reset('page navigated');
     },
     [activeTabId]
   );
@@ -164,7 +174,28 @@ const Browser = forwardRef<BrowserHandle, Props>(({ onRunFinished }, ref) => {
     []
   );
 
+  /**
+   * Human-in-the-loop gate. The loop parks here when it hits a login wall or
+   * challenge; the overlay's Resume button settles the promise.
+   */
+  const awaitResume = useCallback(
+    (reason: string) =>
+      new Promise<boolean>((resolve) => {
+        setPausedReason(reason);
+        resumeRef.current = (proceed: boolean) => {
+          resumeRef.current = null;
+          setPausedReason(null);
+          resolve(proceed);
+        };
+      }),
+    []
+  );
+
+  const resume = useCallback(() => resumeRef.current?.(true), []);
+
   const stop = useCallback(() => {
+    // A parked run is waiting on a promise, not on the abort signal.
+    resumeRef.current?.(false);
     abortRef.current?.abort();
     executor.reset('stopped by user');
     runningRef.current = false;
@@ -199,6 +230,7 @@ const Browser = forwardRef<BrowserHandle, Props>(({ onRunFinished }, ref) => {
           onStatus: setStatus,
           onLog: (entry) => setLastThought(entry.thought),
           confirmSubmit,
+          awaitResume,
         });
       } catch (err) {
         result = {
@@ -211,6 +243,8 @@ const Browser = forwardRef<BrowserHandle, Props>(({ onRunFinished }, ref) => {
 
       runningRef.current = false;
       abortRef.current = null;
+      resumeRef.current = null;
+      setPausedReason(null);
       setStatus({
         phase: result.ok ? 'done' : 'error',
         message: result.summary,
@@ -221,7 +255,7 @@ const Browser = forwardRef<BrowserHandle, Props>(({ onRunFinished }, ref) => {
       onRunFinished?.(result);
       return result;
     },
-    [attach, go, confirmSubmit, onRunFinished]
+    [attach, go, confirmSubmit, awaitResume, onRunFinished]
   );
 
   useImperativeHandle(ref, () => ({
@@ -369,7 +403,12 @@ const Browser = forwardRef<BrowserHandle, Props>(({ onRunFinished }, ref) => {
           style={styles.web}
         />
 
-        <AgentOverlay status={status} onStop={stop} lastThought={lastThought} />
+        <AgentOverlay
+          status={status}
+          onStop={stop}
+          lastThought={lastThought}
+          onResume={pausedReason ? resume : undefined}
+        />
       </View>
 
       <Text style={styles.urlBar} numberOfLines={1}>

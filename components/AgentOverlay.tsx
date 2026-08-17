@@ -10,10 +10,12 @@ interface Props {
   status: AgentStatus;
   onStop: () => void;
   lastThought?: string;
+  /** Present only while the run is parked waiting for the user. */
+  onResume?: () => void;
 }
 
 /** Floating status card shown over the WebView while a run is in flight. */
-export default function AgentOverlay({ status, onStop, lastThought }: Props) {
+export default function AgentOverlay({ status, onStop, lastThought, onResume }: Props) {
   const slide = useRef(new Animated.Value(0)).current;
   const visible = status.phase !== 'idle';
 
@@ -79,6 +81,16 @@ export default function AgentOverlay({ status, onStop, lastThought }: Props) {
           <View style={[styles.progressFill, { width: `${progress * 100}%` }]} />
         </View>
 
+          {/* Parked: the loop is waiting on this button, not on a timer. */}
+          {onResume && (
+            <Pressable
+              onPress={onResume}
+              style={({ pressed }) => [styles.resume, pressed && styles.resumePressed]}
+            >
+              <Text style={styles.resumeText}>Resume Agent</Text>
+            </Pressable>
+          )}
+
           <Text style={styles.meta}>
             Step {status.step} of {status.maxSteps}
             {status.provider ? `  ·  ${status.provider}` : ''}
@@ -122,4 +134,13 @@ const styles = StyleSheet.create({
   },
   stopPressed: { backgroundColor: colors.sunken },
   stopText: { ...type.small, fontWeight: '700', color: colors.text },
+  resume: {
+    marginTop: space.md,
+    backgroundColor: colors.fill,
+    borderRadius: radius.sm,
+    paddingVertical: 11,
+    alignItems: 'center',
+  },
+  resumePressed: { backgroundColor: colors.fillPressed },
+  resumeText: { ...type.bodyStrong, color: colors.onFill },
 });

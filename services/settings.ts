@@ -13,7 +13,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   jobSources: ['remoteok', 'arbeitnow', 'jobicy', 'himalayas', 'linkedin'],
   customSources: [],
   minMatchScore: 65,
-  maxAgentSteps: 25,
+  // Long-running automation needs room; the wall-clock budget in agentLoop is
+  // the real stopping condition.
+  maxAgentSteps: 30,
   autoApplyTopMatches: false,
   confirmBeforeSubmit: true,
 };

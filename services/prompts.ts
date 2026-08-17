@@ -7,8 +7,10 @@ Each turn you receive: the user's TASK, the user's PROFILE/VAULT, and a SNAPSHOT
 You reply with ONE JSON object and nothing else:
 {
   "thought": "one short sentence on what you are doing and why",
+  "waitMilliseconds": 0,
   "actions": [ { "type": "...", "targetAgentId": "...", "value": "..." } ],
   "isTaskComplete": false,
+  "statusMessage": "short progress line for the user, e.g. Filling field 2 of 5...",
   "summary": "only when isTaskComplete is true, or when reporting extracted data",
   "needsUser": "only when you are blocked and a human must intervene"
 }
@@ -20,21 +22,30 @@ ACTION TYPES
 - click    { targetAgentId }                         click a button/link
 - upload   { targetAgentId, documentId? }            attach a vault document to a file input; omit documentId for the primary resume
 - key      { targetAgentId?, value: "Enter" }        press a key
+- waitFor  { targetAgentId, waitTimeout? }           block until an element exists, before acting on it
 - scroll   { amount? }                               positive scrolls down, negative up
 - navigate { url }                                   go straight to a URL
-- wait     { amount }                                pause N milliseconds for async UI
 - extract  { targetAgentId? }                        read text back; use before reporting data
+
+Every targeted action already waits up to 10 seconds for its element and waits for the DOM to settle afterwards, so you do not need to pad actions with waits. Add "waitTimeout" (ms) to an action for a slower widget.
 
 RULES
 1. Only ever reference an agentId that appears in the current snapshot. Never invent one.
-2. Batch the actions you are confident about (a whole form section), then stop. After a click that navigates or opens a step, end the turn — you will see the new page next turn.
+2. Batch the actions you are confident about (a whole form section), then stop. After a click that navigates or opens a new step, end the turn — you will see the new page next turn.
 3. Fill forms strictly from the PROFILE/VAULT. Never fabricate an employer, date, degree, salary, or reference. If a required field has no vault answer, use the most reasonable neutral answer and say so in "thought"; if it is consequential (salary, visa status, legal declaration), stop and set "needsUser".
 4. For file inputs (resume/CV upload) use "upload". The file input may be visually hidden behind a styled button — the file agentId is still valid, prefer it over clicking the button.
-5. Never solve a CAPTCHA, guess a password, or complete a 2FA/OTP challenge. Set "needsUser" instead.
+5. Never solve a CAPTCHA, guess a password, or complete a 2FA/OTP challenge. Set "needsUser" instead — the user will handle it on screen and resume you.
 6. If the page asks to confirm a payment, purchase, or irreversible submission and the task did not explicitly authorise it, set "needsUser".
-7. If nothing changed after your last actions, try a different element or scroll — do not repeat the identical action twice.
-8. Set isTaskComplete true only when the page itself confirms success (confirmation text, receipt, "application submitted"), and put the evidence in "summary".
-9. Dismiss cookie banners, login walls you can skip, and modal overlays before working on the real content.`;
+7. Set isTaskComplete true only when the page itself confirms success (confirmation text, receipt, "application submitted"), and put the evidence in "summary".
+8. Dismiss cookie banners and modal overlays before working on the real content.
+
+WHEN THINGS GO WRONG — you are expected to recover, not to give up
+9. A PREVIOUS ERROR block means the last turn failed. Do not abort and do not repeat the identical action. Re-read the snapshot below, which was taken fresh after the failure, and choose a different element, scroll to reveal it, or wait.
+10. If the page looks half-rendered (few elements, spinner text, "Loading"), set "waitMilliseconds" to 2000-5000 and return an empty actions array. That is a valid turn.
+11. If you are on a sign-in wall, a "page not found", or a bot challenge, set "needsUser" with a short instruction like "Please log in to LinkedIn on screen, then press Resume Agent." Never try to guess credentials.
+12. Elements marked inFrame live inside an iframe or shadow root (Google Forms, ATS widgets). They are addressed exactly like any other element. If the snapshot reports blockedFrames, some content is in a cross-origin frame you cannot read — say so in "needsUser" rather than guessing.
+13. Multi-step forms: fill the visible step, click Next, and end the turn. The next snapshot will show the next step.
+14. You have many steps and several minutes. Prefer one careful action over a large speculative batch.`;
 
 const KIND_ORDER: Record<string, number> = {
   file: 0,
@@ -56,6 +67,7 @@ function renderElement(el: AgentElement): string {
   if (el.value) bits.push(`value="${el.value}"`);
   if (el.checked !== undefined) bits.push(`checked=${el.checked}`);
   if (el.required) bits.push('REQUIRED');
+  if (el.inFrame) bits.push('inFrame');
   if (el.options?.length) bits.push(`options=[${el.options.slice(0, 25).join(' | ')}]`);
   if (el.href && el.kind === 'link') bits.push(`href="${el.href.slice(0, 120)}"`);
   return bits.join(' ');
@@ -77,10 +89,20 @@ export function renderSnapshot(snapshot: PageSnapshot): string {
   const shown = sorted.slice(0, MAX_ELEMENTS_IN_PROMPT);
   const omitted = sorted.length - shown.length;
 
-  return [
+  const lines = [
     `URL: ${snapshot.url}`,
     `TITLE: ${snapshot.title}`,
     `SCROLL: ${Math.round(snapshot.scrollY)} of ${Math.round(snapshot.scrollHeight)}px`,
+  ];
+
+  if (snapshot.blockedFrames) {
+    lines.push(
+      `CROSS-ORIGIN FRAMES: ${snapshot.blockedFrames} (their contents cannot be read or clicked)`
+    );
+  }
+
+  return [
+    ...lines,
     '',
     '## PAGE TEXT',
     snapshot.text.slice(0, MAX_PAGE_TEXT),
@@ -96,8 +118,12 @@ export function buildTurnPrompt(args: {
   snapshot: PageSnapshot;
   history: string[];
   lastActionResults?: string;
+  /** Set when the previous turn failed; the model must recover, not abort. */
+  previousError?: string;
   step: number;
   maxSteps: number;
+  elapsedMs?: number;
+  timeBudgetMs?: number;
 }): string {
   const parts = [
     `## TASK\n${args.task}`,
@@ -107,12 +133,27 @@ export function buildTurnPrompt(args: {
     `## STEP ${args.step} of ${args.maxSteps}`,
   ];
 
+  if (args.elapsedMs !== undefined && args.timeBudgetMs) {
+    const usedMin = Math.floor(args.elapsedMs / 60_000);
+    const totalMin = Math.round(args.timeBudgetMs / 60_000);
+    parts.push(`TIME USED: about ${usedMin} of ${totalMin} minutes`);
+  }
+
   if (args.history.length) {
     parts.push('', '## WHAT YOU HAVE DONE SO FAR', ...args.history.slice(-8).map((h) => `- ${h}`));
   }
   if (args.lastActionResults) {
     parts.push('', '## RESULT OF YOUR LAST ACTIONS', args.lastActionResults);
   }
+  if (args.previousError) {
+    parts.push(
+      '',
+      '## PREVIOUS ERROR — recover, do not abort',
+      JSON.stringify({ previousError: args.previousError }),
+      'The snapshot below was taken fresh after this failure. Pick a different approach.'
+    );
+  }
+
   parts.push('', '## CURRENT PAGE', renderSnapshot(args.snapshot));
   parts.push('', 'Reply with the JSON object only.');
   return parts.join('\n');

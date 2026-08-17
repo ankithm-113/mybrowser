@@ -3,14 +3,19 @@
  *
  * The DOM inspector + action executor that runs *inside* the WebView.
  *
- * It is authored here as a plain string so Metro can bundle it without a raw
- * loader. The script must avoid backticks and ${ so it survives String.raw.
+ * Authored as a plain string so Metro can bundle it without a raw loader. The
+ * script must avoid backticks and ${ so it survives String.raw.
  *
  * Responsibilities inside the page:
- *   1. Tag every interactive element with a stable `data-agent-id`.
- *   2. Re-tag on DOM mutations (SPA route changes, async form rendering).
- *   3. Serialise a compact PageSnapshot back to React Native.
- *   4. Execute actions with *real* synthetic events so React / Vue / Angular
+ *   1. Tag every interactive element with a stable `data-agent-id`, reaching
+ *      into open shadow roots and same-origin iframes — Google Forms, ATS
+ *      widgets and embedded checkouts all render inside one or the other.
+ *   2. Wait for elements to appear rather than failing the moment they are
+ *      missing; dynamic pages attach inputs seconds after first paint.
+ *   3. Wait for the DOM to settle after a mutating action, so multi-step forms
+ *      are never driven faster than they render.
+ *   4. Detect SPA route changes, where no load event ever fires.
+ *   5. Execute actions with real synthetic events so React / Vue / Angular
  *      controlled inputs actually register the change.
  *
  * Messages posted to RN are JSON: { channel, ...payload }.
@@ -19,14 +24,22 @@
 
 export const DOM_READER_JS = String.raw`
 (function () {
-  if (window.__AGENT__ && window.__AGENT__.version === 1) {
+  var VERSION = 2;
+  if (window.__AGENT__ && window.__AGENT__.version === VERSION) {
     window.__AGENT__.scan(true);
     return;
   }
 
   var MAX_ELEMENTS = 220;
   var MAX_TEXT = 6000;
+  var MAX_FRAME_DEPTH = 4;
+  var DEFAULT_WAIT_MS = 10000;
+  var SETTLE_QUIET_MS = 400;
+  var SETTLE_MAX_MS = 8000;
+
   var counter = 0;
+  var lastUrl = location.href;
+  var blockedFrames = 0;
 
   function post(channel, payload) {
     try {
@@ -41,41 +54,127 @@ export const DOM_READER_JS = String.raw`
     }
   }
 
+  /* ------------------------------- root walking ------------------------------ */
+
+  /**
+   * Every queryable root: the main document, open shadow roots, and the
+   * documents of same-origin iframes. Cross-origin frames throw on access and
+   * are counted instead, so the agent knows content is hidden from it.
+   */
+  function collectRoots() {
+    blockedFrames = 0;
+    var roots = [];
+
+    function walk(root, depth) {
+      if (!root || depth > MAX_FRAME_DEPTH || roots.indexOf(root) !== -1) return;
+      roots.push(root);
+
+      var hosts;
+      try { hosts = root.querySelectorAll('*'); } catch (e) { return; }
+      for (var i = 0; i < hosts.length; i++) {
+        if (hosts[i].shadowRoot) walk(hosts[i].shadowRoot, depth + 1);
+      }
+
+      var frames;
+      try { frames = root.querySelectorAll('iframe,frame'); } catch (e) { frames = []; }
+      for (var j = 0; j < frames.length; j++) {
+        var doc = null;
+        try {
+          doc = frames[j].contentDocument;
+          if (doc && !doc.body) doc = null;
+        } catch (e) {
+          doc = null;
+        }
+        if (doc) walk(doc, depth + 1);
+        else blockedFrames++;
+      }
+    }
+
+    walk(document, 0);
+    return roots;
+  }
+
+  function queryAll(selector) {
+    var roots = collectRoots();
+    var out = [];
+    for (var i = 0; i < roots.length; i++) {
+      var found;
+      try { found = roots[i].querySelectorAll(selector); } catch (e) { continue; }
+      for (var j = 0; j < found.length; j++) out.push(found[j]);
+    }
+    return out;
+  }
+
+  function findEl(agentId) {
+    var selector = '[data-agent-id="' + CSS.escape(agentId) + '"]';
+    var roots = collectRoots();
+    for (var i = 0; i < roots.length; i++) {
+      var el;
+      try { el = roots[i].querySelector(selector); } catch (e) { continue; }
+      if (el) return el;
+    }
+    return null;
+  }
+
+  /* --------------------------------- tagging -------------------------------- */
+
   function isVisible(el) {
     if (!el || !el.getBoundingClientRect) return false;
     if (el.disabled) return false;
-    var style = window.getComputedStyle(el);
+
+    // File inputs are almost always display:none behind a styled label, and
+    // they are the only way to attach a resume. Never filter them out — this
+    // check must precede every other visibility rule.
+    if (el.type === 'file') return true;
+
+    var view = (el.ownerDocument && el.ownerDocument.defaultView) || window;
+    var style;
+    try { style = view.getComputedStyle(el); } catch (e) { return false; }
+    if (!style) return false;
     if (style.visibility === 'hidden' || style.display === 'none') return false;
     if (parseFloat(style.opacity || '1') < 0.05) return false;
     var r = el.getBoundingClientRect();
-    // File inputs are routinely 0x0 and driven by a styled label; keep them.
-    if (el.type === 'file') return true;
     if (r.width < 2 || r.height < 2) return false;
-    if (r.bottom < -window.innerHeight * 2) return false;
-    if (r.top > window.innerHeight * 4) return false;
+    if (r.bottom < -view.innerHeight * 2) return false;
+    if (r.top > view.innerHeight * 4) return false;
     return true;
+  }
+
+  /** innerText is layout-aware but absent in some engines; fall back safely. */
+  function textOf(el) {
+    if (!el) return '';
+    var t = el.innerText;
+    if (typeof t !== 'string' || !t.length) t = el.textContent || '';
+    return t;
   }
 
   function labelFor(el) {
     var parts = [];
+    var doc = el.ownerDocument || document;
     if (el.id) {
-      var lab = document.querySelector('label[for="' + CSS.escape(el.id) + '"]');
-      if (lab && lab.innerText) parts.push(lab.innerText);
+      try {
+        var lab = doc.querySelector('label[for="' + CSS.escape(el.id) + '"]');
+        if (lab) { var labText = textOf(lab); if (labText) parts.push(labText); }
+      } catch (e) { /* id is not selector-safe */ }
     }
     var wrapper = el.closest ? el.closest('label') : null;
-    if (wrapper && wrapper.innerText) parts.push(wrapper.innerText);
+    if (wrapper) { var wrapText = textOf(wrapper); if (wrapText) parts.push(wrapText); }
     if (el.getAttribute('aria-label')) parts.push(el.getAttribute('aria-label'));
     var labelledBy = el.getAttribute('aria-labelledby');
     if (labelledBy) {
       labelledBy.split(/\s+/).forEach(function (id) {
-        var node = document.getElementById(id);
-        if (node && node.innerText) parts.push(node.innerText);
+        var node = doc.getElementById(id);
+        if (node) { var nodeText = textOf(node); if (nodeText) parts.push(nodeText); }
       });
     }
-    if (!parts.length && el.parentElement) {
-      // Fall back to the nearest preceding text node in the field group.
+    if (!parts.length) {
+      // Google Forms keeps the question text in an ancestor listitem.
+      var item = el.closest ? el.closest('[role=listitem]') : null;
+      if (item && item.innerText) parts.push(item.innerText.split('\n')[0]);
+    }
+    if (!parts.length && el.previousElementSibling) {
       var prev = el.previousElementSibling;
-      if (prev && prev.innerText && prev.innerText.length < 120) parts.push(prev.innerText);
+      var prevText = textOf(prev); if (prevText && prevText.length < 120) parts.push(prevText);
     }
     return parts.join(' ').replace(/\s+/g, ' ').trim().slice(0, 140);
   }
@@ -96,37 +195,35 @@ export const DOM_READER_JS = String.raw`
     }
     var role = (el.getAttribute('role') || '').toLowerCase();
     if (role === 'button' || role === 'tab' || role === 'menuitem') return 'button';
-    if (role === 'checkbox') return 'checkbox';
+    if (role === 'checkbox' || role === 'switch') return 'checkbox';
+    if (role === 'radio') return 'radio';
     if (role === 'link') return 'link';
     if (role === 'combobox' || role === 'listbox') return 'select';
-    if (el.isContentEditable) return 'textarea';
+    if (role === 'textbox' || el.isContentEditable) return 'textarea';
     return 'button';
   }
 
   var SELECTOR = [
     'input', 'textarea', 'select', 'button', 'a[href]',
-    '[role=button]', '[role=link]', '[role=checkbox]', '[role=tab]',
-    '[role=combobox]', '[role=listbox]', '[role=menuitem]',
+    '[role=button]', '[role=link]', '[role=checkbox]', '[role=switch]', '[role=radio]',
+    '[role=tab]', '[role=combobox]', '[role=listbox]', '[role=menuitem]', '[role=textbox]',
     '[contenteditable=true]', '[onclick]'
   ].join(',');
 
   function tagAll() {
-    var nodes = document.querySelectorAll(SELECTOR);
+    var nodes = queryAll(SELECTOR);
     for (var i = 0; i < nodes.length; i++) {
-      var el = nodes[i];
-      if (!el.getAttribute('data-agent-id')) {
+      if (!nodes[i].getAttribute('data-agent-id')) {
         counter += 1;
-        el.setAttribute('data-agent-id', kindOf(el) + '-' + counter);
+        nodes[i].setAttribute('data-agent-id', kindOf(nodes[i]) + '-' + counter);
       }
     }
   }
 
   function describe(el) {
     var kind = kindOf(el);
-    var text = (el.innerText || el.value || el.getAttribute('title') || '')
-      .replace(/\s+/g, ' ')
-      .trim()
-      .slice(0, 120);
+    var text = (textOf(el) || el.value || el.getAttribute('title') || '')
+      .replace(/\s+/g, ' ').trim().slice(0, 120);
 
     var item = {
       agentId: el.getAttribute('data-agent-id'),
@@ -139,6 +236,8 @@ export const DOM_READER_JS = String.raw`
       required: el.required || el.getAttribute('aria-required') === 'true' || undefined,
       text: text || undefined
     };
+
+    if (el.ownerDocument !== document) item.inFrame = true;
 
     if (kind === 'input' || kind === 'textarea') {
       item.value = (el.value || el.innerText || '').slice(0, 160);
@@ -156,17 +255,23 @@ export const DOM_READER_JS = String.raw`
   }
 
   function readableText() {
-    var clone = document.body ? document.body.cloneNode(true) : null;
-    if (!clone) return '';
-    var junk = clone.querySelectorAll('script,style,noscript,svg,iframe');
-    for (var i = 0; i < junk.length; i++) junk[i].remove();
-    return (clone.innerText || '').replace(/\n{3,}/g, '\n\n').replace(/[ \t]{2,}/g, ' ')
-      .trim().slice(0, MAX_TEXT);
+    var out = '';
+    var roots = collectRoots();
+    for (var i = 0; i < roots.length && out.length < MAX_TEXT; i++) {
+      var body = roots[i].body || roots[i];
+      if (!body || !body.cloneNode) continue;
+      var clone;
+      try { clone = body.cloneNode(true); } catch (e) { continue; }
+      var junk = clone.querySelectorAll ? clone.querySelectorAll('script,style,noscript,svg') : [];
+      for (var j = 0; j < junk.length; j++) junk[j].remove();
+      out += (clone.innerText || '') + '\n';
+    }
+    return out.replace(/\n{3,}/g, '\n\n').replace(/[ \t]{2,}/g, ' ').trim().slice(0, MAX_TEXT);
   }
 
   function snapshot() {
     tagAll();
-    var nodes = document.querySelectorAll('[data-agent-id]');
+    var nodes = queryAll('[data-agent-id]');
     var elements = [];
     for (var i = 0; i < nodes.length && elements.length < MAX_ELEMENTS; i++) {
       if (isVisible(nodes[i])) elements.push(describe(nodes[i]));
@@ -178,13 +283,74 @@ export const DOM_READER_JS = String.raw`
       elements: elements,
       scrollY: window.scrollY,
       scrollHeight: document.documentElement.scrollHeight,
+      blockedFrames: blockedFrames,
       capturedAt: Date.now()
     };
   }
 
-  function find(agentId) {
-    return document.querySelector('[data-agent-id="' + CSS.escape(agentId) + '"]');
+  /* --------------------------------- waiting -------------------------------- */
+
+  /**
+   * Poll for an element rather than failing immediately. Dynamic pages attach
+   * inputs long after first paint, and an agent that gives up on the first
+   * miss cannot drive a Google Form or any ATS at all.
+   */
+  function waitForElement(agentId, timeout, cb) {
+    var deadline = Date.now() + (timeout || DEFAULT_WAIT_MS);
+    var immediate = findEl(agentId);
+    if (immediate) return cb(immediate);
+
+    var timer = setInterval(function () {
+      var el = findEl(agentId);
+      if (el) {
+        clearInterval(timer);
+        cb(el);
+      } else if (Date.now() > deadline) {
+        clearInterval(timer);
+        cb(null);
+      }
+    }, 250);
   }
+
+  /**
+   * Resolves once the DOM has been quiet for quietMs, or maxMs has elapsed.
+   * Runs after every mutating action so the next action sees the page that
+   * the previous click actually produced.
+   */
+  function settle(cb, quietMs, maxMs) {
+    var quiet = quietMs || SETTLE_QUIET_MS;
+    var max = maxMs || SETTLE_MAX_MS;
+    var done = false;
+    var quietTimer = null;
+    var observer = null;
+
+    var hardStop = setTimeout(finish, max);
+
+    function finish() {
+      if (done) return;
+      done = true;
+      if (quietTimer) clearTimeout(quietTimer);
+      if (observer) observer.disconnect();
+      clearTimeout(hardStop);
+      cb();
+    }
+
+    function restartQuiet() {
+      if (quietTimer) clearTimeout(quietTimer);
+      quietTimer = setTimeout(finish, quiet);
+    }
+
+    try {
+      observer = new MutationObserver(restartQuiet);
+      observer.observe(document.body || document.documentElement, {
+        childList: true, subtree: true, attributes: true, characterData: true
+      });
+    } catch (e) { /* observation unavailable; the hard stop still fires */ }
+
+    restartQuiet();
+  }
+
+  /* --------------------------------- actions -------------------------------- */
 
   function scrollIntoView(el) {
     try { el.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) { /* older engines */ }
@@ -194,7 +360,7 @@ export const DOM_READER_JS = String.raw`
    * React (and Vue/Angular) track input values on the DOM node's own property,
    * so assigning el.value directly is swallowed. Calling the *prototype*
    * setter bypasses the framework's value tracker, after which a bubbling
-   * 'input' event makes the framework observe the real change.
+   * input event makes the framework observe the real change.
    */
   function setNativeValue(el, value) {
     var proto = Object.getPrototypeOf(el);
@@ -203,41 +369,52 @@ export const DOM_READER_JS = String.raw`
     else el.value = value;
   }
 
-  function fireInputEvents(el) {
-    el.dispatchEvent(new Event('input', { bubbles: true }));
-    el.dispatchEvent(new Event('change', { bubbles: true }));
+  function keyEvents(el, key) {
+    var view = (el.ownerDocument && el.ownerDocument.defaultView) || window;
+    var opts = { bubbles: true, cancelable: true, key: key, code: key, view: view };
+    el.dispatchEvent(new KeyboardEvent('keydown', opts));
+    el.dispatchEvent(new KeyboardEvent('keypress', opts));
+    el.dispatchEvent(new KeyboardEvent('keyup', opts));
   }
 
+  /** Full synthetic chain: focus -> keydown -> input -> change -> blur. */
   function fill(el, value) {
     scrollIntoView(el);
-    el.focus();
+    if (el.focus) el.focus();
+    el.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+    el.dispatchEvent(new Event('focus', { bubbles: false }));
+
     if (el.isContentEditable) {
       el.innerText = value;
-      fireInputEvents(el);
+      el.dispatchEvent(new Event('input', { bubbles: true }));
     } else {
       setNativeValue(el, '');
-      fireInputEvents(el);
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      keyEvents(el, value.slice(-1) || 'a');
       setNativeValue(el, value);
-      fireInputEvents(el);
+      el.dispatchEvent(new Event('input', { bubbles: true }));
     }
-    el.dispatchEvent(new Event('blur', { bubbles: true }));
+
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    el.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
+    el.dispatchEvent(new Event('blur', { bubbles: false }));
+    if (el.blur) el.blur();
     return 'filled ' + (el.getAttribute('data-agent-id') || '');
   }
 
   function click(el) {
     scrollIntoView(el);
+    var view = (el.ownerDocument && el.ownerDocument.defaultView) || window;
     var rect = el.getBoundingClientRect();
     var opts = {
-      bubbles: true,
-      cancelable: true,
-      view: window,
+      bubbles: true, cancelable: true, view: view,
       clientX: rect.left + rect.width / 2,
       clientY: rect.top + rect.height / 2
     };
-    el.dispatchEvent(new PointerEvent('pointerdown', opts));
+    try { el.dispatchEvent(new PointerEvent('pointerdown', opts)); } catch (e) { /* no PointerEvent */ }
     el.dispatchEvent(new MouseEvent('mousedown', opts));
-    el.focus();
-    el.dispatchEvent(new PointerEvent('pointerup', opts));
+    if (el.focus) el.focus();
+    try { el.dispatchEvent(new PointerEvent('pointerup', opts)); } catch (e) { /* no PointerEvent */ }
     el.dispatchEvent(new MouseEvent('mouseup', opts));
     el.dispatchEvent(new MouseEvent('click', opts));
     return 'clicked ' + (el.getAttribute('data-agent-id') || '');
@@ -247,35 +424,34 @@ export const DOM_READER_JS = String.raw`
     scrollIntoView(el);
     var wanted = String(value).toLowerCase();
     var matched = false;
-    for (var i = 0; i < el.options.length; i++) {
-      var opt = el.options[i];
-      var text = (opt.text || '').toLowerCase();
-      if (text === wanted || (opt.value || '').toLowerCase() === wanted) {
-        el.selectedIndex = i; matched = true; break;
+    if (el.options) {
+      for (var i = 0; i < el.options.length; i++) {
+        var opt = el.options[i];
+        if ((opt.text || '').toLowerCase() === wanted || (opt.value || '').toLowerCase() === wanted) {
+          el.selectedIndex = i; matched = true; break;
+        }
       }
-    }
-    if (!matched) {
-      for (var j = 0; j < el.options.length; j++) {
-        if ((el.options[j].text || '').toLowerCase().indexOf(wanted) !== -1) {
-          el.selectedIndex = j; matched = true; break;
+      if (!matched) {
+        for (var j = 0; j < el.options.length; j++) {
+          if ((el.options[j].text || '').toLowerCase().indexOf(wanted) !== -1) {
+            el.selectedIndex = j; matched = true; break;
+          }
         }
       }
     }
-    fireInputEvents(el);
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
     return matched ? 'selected ' + value : 'no option matching ' + value;
   }
 
   function setChecked(el, wanted) {
     scrollIntoView(el);
     var want = wanted !== 'false';
-    if (!!el.checked !== want) click(el);
-    return 'checkbox now ' + (!!el.checked);
+    var current = !!el.checked || el.getAttribute('aria-checked') === 'true';
+    if (current !== want) click(el);
+    return 'checkbox now ' + (!!el.checked || el.getAttribute('aria-checked') === 'true');
   }
 
-  /**
-   * Attaches a file to an <input type=file> from a base64 payload handed down
-   * by React Native (the WebView has no access to the app sandbox otherwise).
-   */
   function uploadFile(el, fileName, mimeType, base64) {
     var binary = atob(base64);
     var bytes = new Uint8Array(binary.length);
@@ -284,35 +460,25 @@ export const DOM_READER_JS = String.raw`
     var dt = new DataTransfer();
     dt.items.add(file);
     el.files = dt.files;
-    fireInputEvents(el);
-    el.dispatchEvent(new Event('blur', { bubbles: true }));
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    el.dispatchEvent(new Event('blur', { bubbles: false }));
     return 'uploaded ' + fileName;
   }
 
-  function pressKey(el, key) {
-    var target = el || document.activeElement || document.body;
-    var opts = { bubbles: true, cancelable: true, key: key, code: key };
-    target.dispatchEvent(new KeyboardEvent('keydown', opts));
-    target.dispatchEvent(new KeyboardEvent('keypress', opts));
-    target.dispatchEvent(new KeyboardEvent('keyup', opts));
-    if (key === 'Enter' && target.form && target.form.requestSubmit) {
-      try { target.form.requestSubmit(); } catch (e) { /* blocked by the page */ }
-    }
-    return 'pressed ' + key;
-  }
-
-  function runAction(action) {
-    var el = action.targetAgentId ? find(action.targetAgentId) : null;
-    if (action.targetAgentId && !el) {
-      return { ok: false, detail: 'no element with data-agent-id=' + action.targetAgentId };
-    }
+  function performAction(action, el) {
     try {
       switch (action.type) {
-        case 'fill':     return { ok: true, detail: fill(el, action.value || '') };
-        case 'click':    return { ok: true, detail: click(el) };
-        case 'select':   return { ok: true, detail: selectOption(el, action.value || '') };
-        case 'check':    return { ok: true, detail: setChecked(el, action.value || 'true') };
-        case 'key':      return { ok: true, detail: pressKey(el, action.value || 'Enter') };
+        case 'fill':   return { ok: true, detail: fill(el, action.value || '') };
+        case 'click':  return { ok: true, detail: click(el) };
+        case 'select': return { ok: true, detail: selectOption(el, action.value || '') };
+        case 'check':  return { ok: true, detail: setChecked(el, action.value || 'true') };
+        case 'key':
+          keyEvents(el || document.activeElement || document.body, action.value || 'Enter');
+          if (action.value === 'Enter' && el && el.form && el.form.requestSubmit) {
+            try { el.form.requestSubmit(); } catch (e) { /* blocked by the page */ }
+          }
+          return { ok: true, detail: 'pressed ' + (action.value || 'Enter') };
         case 'upload':
           return { ok: true, detail: uploadFile(el, action.fileName, action.mimeType, action.base64) };
         case 'scroll':
@@ -323,6 +489,8 @@ export const DOM_READER_JS = String.raw`
           return { ok: true, detail: 'navigating to ' + action.url };
         case 'extract':
           return { ok: true, detail: (el ? el.innerText : document.body.innerText).slice(0, 2000) };
+        case 'waitFor':
+          return { ok: true, detail: 'element ' + action.targetAgentId + ' is present' };
         default:
           return { ok: false, detail: 'unknown action type ' + action.type };
       }
@@ -331,27 +499,112 @@ export const DOM_READER_JS = String.raw`
     }
   }
 
+  var MUTATING = ['click', 'select', 'check', 'key', 'upload'];
+
+  /**
+   * Runs actions in sequence. Each targeted action waits for its element to
+   * exist first, and every mutating action is followed by a settle window so
+   * the next action sees the page the previous one produced.
+   */
+  function runActions(actions, index, results, done) {
+    if (index >= actions.length) return done(results);
+    var action = actions[index];
+
+    function advance(result) {
+      results.push({ action: action, ok: result.ok, detail: result.detail });
+      if (!result.ok || action.type === 'navigate') return done(results);
+      if (MUTATING.indexOf(action.type) !== -1) {
+        settle(function () { runActions(actions, index + 1, results, done); },
+               action.settleQuietMs, action.settleMaxMs);
+      } else {
+        runActions(actions, index + 1, results, done);
+      }
+    }
+
+    if (action.targetAgentId) {
+      var budget = action.waitTimeout || DEFAULT_WAIT_MS;
+      waitForElement(action.targetAgentId, budget, function (el) {
+        if (!el) {
+          results.push({
+            action: action,
+            ok: false,
+            detail: 'element ' + action.targetAgentId + ' did not appear within ' + budget + 'ms'
+          });
+          return done(results);
+        }
+        advance(performAction(action, el));
+      });
+    } else {
+      advance(performAction(action, null));
+    }
+  }
+
+  /* ------------------------------ observation ------------------------------- */
+
   var scanTimer = null;
   function scheduleScan() {
     if (scanTimer) clearTimeout(scanTimer);
     scanTimer = setTimeout(function () { post('snapshot', { snapshot: snapshot() }); }, 450);
   }
 
-  var observer = new MutationObserver(function (records) {
-    for (var i = 0; i < records.length; i++) {
-      if (records[i].addedNodes.length || records[i].removedNodes.length) {
-        scheduleScan();
-        return;
-      }
-    }
-  });
-
-  if (document.body) {
-    observer.observe(document.body, { childList: true, subtree: true });
+  function observeRoot(root) {
+    try {
+      var target = root.body || root.documentElement || root;
+      if (!target || target.__agentObserved) return;
+      target.__agentObserved = true;
+      new MutationObserver(function (records) {
+        for (var i = 0; i < records.length; i++) {
+          if (records[i].addedNodes.length || records[i].removedNodes.length) {
+            scheduleScan();
+            return;
+          }
+        }
+      }).observe(target, { childList: true, subtree: true });
+    } catch (e) { /* cross-origin or detached */ }
   }
 
+  function observeAll() {
+    var roots = collectRoots();
+    for (var i = 0; i < roots.length; i++) observeRoot(roots[i]);
+  }
+
+  /**
+   * SPA route changes fire no load event, so the native side never learns the
+   * page changed. Patch the history API, listen for pops, and poll as a
+   * backstop for frameworks that change location by other means.
+   */
+  function watchUrl() {
+    function announce() {
+      if (location.href === lastUrl) return;
+      lastUrl = location.href;
+      post('urlchange', { url: location.href });
+      setTimeout(function () {
+        observeAll();
+        post('snapshot', { snapshot: snapshot() });
+      }, 500);
+    }
+
+    ['pushState', 'replaceState'].forEach(function (name) {
+      var original = history[name];
+      if (!original || original.__agentPatched) return;
+      var patched = function () {
+        var result = original.apply(this, arguments);
+        setTimeout(announce, 0);
+        return result;
+      };
+      patched.__agentPatched = true;
+      history[name] = patched;
+    });
+
+    window.addEventListener('popstate', announce);
+    window.addEventListener('hashchange', announce);
+    setInterval(announce, 700);
+  }
+
+  /* -------------------------------- dispatch -------------------------------- */
+
   window.__AGENT__ = {
-    version: 1,
+    version: VERSION,
     scan: function (immediate) {
       if (immediate) post('snapshot', { snapshot: snapshot() });
       else scheduleScan();
@@ -364,23 +617,33 @@ export const DOM_READER_JS = String.raw`
       if (cmd.op === 'snapshot') {
         return post('snapshot', { requestId: cmd.requestId, snapshot: snapshot() });
       }
-      if (cmd.op === 'execute') {
-        var results = [];
-        for (var i = 0; i < cmd.actions.length; i++) {
-          var r = runAction(cmd.actions[i]);
-          results.push({ action: cmd.actions[i], ok: r.ok, detail: r.detail });
-          if (!r.ok) break;
-          if (cmd.actions[i].type === 'navigate') break;
-        }
-        post('actionResult', { requestId: cmd.requestId, results: results });
-        setTimeout(function () { post('snapshot', { snapshot: snapshot() }); }, 900);
-        return;
+
+      if (cmd.op === 'waitFor') {
+        return waitForElement(cmd.agentId, cmd.timeout || DEFAULT_WAIT_MS, function (el) {
+          post('waitResult', { requestId: cmd.requestId, found: !!el, agentId: cmd.agentId });
+        });
       }
+
+      if (cmd.op === 'settle') {
+        return settle(function () {
+          post('settleResult', { requestId: cmd.requestId, snapshot: snapshot() });
+        }, cmd.quietMs, cmd.maxMs);
+      }
+
+      if (cmd.op === 'execute') {
+        return runActions(cmd.actions, 0, [], function (results) {
+          post('actionResult', { requestId: cmd.requestId, results: results });
+          settle(function () { post('snapshot', { snapshot: snapshot() }); }, 300, 4000);
+        });
+      }
+
       post('error', { message: 'unknown op ' + cmd.op });
     }
   };
 
-  post('ready', { url: location.href, title: document.title });
+  observeAll();
+  watchUrl();
+  post('ready', { url: location.href, title: document.title, version: VERSION });
   post('snapshot', { snapshot: snapshot() });
 })();
 true;

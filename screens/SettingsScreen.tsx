@@ -486,7 +486,7 @@ export default function SettingsScreen() {
 
           <Text style={shared.label}>Max steps per run</Text>
           <View style={styles.chipRow}>
-            {[10, 15, 25, 40].map((value) => (
+            {[15, 30, 50, 80].map((value) => (
               <Chip
                 key={value}
                 label={String(value)}
