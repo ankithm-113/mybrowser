@@ -33,6 +33,7 @@ export const DOM_READER_JS = String.raw`
   var MAX_ELEMENTS = 220;
   var MAX_TEXT = 6000;
   var MAX_FRAME_DEPTH = 4;
+  var MAX_SHADOW_DEPTH = 12;
   var DEFAULT_WAIT_MS = 10000;
   var SETTLE_QUIET_MS = 400;
   var SETTLE_MAX_MS = 8000;
@@ -94,14 +95,20 @@ export const DOM_READER_JS = String.raw`
     blockedFrameUrls = [];
     var roots = [];
 
-    function walk(root, depth) {
-      if (!root || depth > MAX_FRAME_DEPTH || roots.indexOf(root) !== -1) return;
+    /**
+     * Shadow depth and frame depth are budgeted separately: component
+     * libraries nest shadow roots many levels deep (a Material radio group is
+     * routinely 4-6 hosts down), while frames rarely nest past two.
+     */
+    function walk(root, shadowDepth, frameDepth) {
+      if (!root || roots.indexOf(root) !== -1) return;
+      if (shadowDepth > MAX_SHADOW_DEPTH || frameDepth > MAX_FRAME_DEPTH) return;
       roots.push(root);
 
       var hosts;
       try { hosts = root.querySelectorAll('*'); } catch (e) { return; }
       for (var i = 0; i < hosts.length; i++) {
-        if (hosts[i].shadowRoot) walk(hosts[i].shadowRoot, depth + 1);
+        if (hosts[i].shadowRoot) walk(hosts[i].shadowRoot, shadowDepth + 1, frameDepth);
       }
 
       var frames;
@@ -115,7 +122,7 @@ export const DOM_READER_JS = String.raw`
           doc = null;
         }
         if (doc) {
-          walk(doc, depth + 1);
+          walk(doc, shadowDepth, frameDepth + 1);
         } else {
           blockedFrames++;
           // Report the src so the agent can open the embed as a top-level page,
@@ -126,7 +133,7 @@ export const DOM_READER_JS = String.raw`
       }
     }
 
-    walk(document, 0);
+    walk(document, 0, 0);
     return roots;
   }
 
@@ -154,23 +161,66 @@ export const DOM_READER_JS = String.raw`
 
   /* --------------------------------- tagging -------------------------------- */
 
+  /**
+   * Design systems (Material, Polymer, most component libraries) render a
+   * styled wrapper and hide the real control behind it — opacity:0, a 1x1
+   * sr-only box, or a zero-size input inside a shadow root. The control is
+   * still the only thing that accepts a click, so judge visibility by the
+   * nearest painted ancestor rather than the control's own box.
+   */
+  function hasVisibleAncestor(el) {
+    var node = el;
+    for (var depth = 0; node && depth < 8; depth++) {
+      var next = node.parentElement;
+      if (!next) {
+        var root = node.getRootNode ? node.getRootNode() : null;
+        next = root && root.host ? root.host : null;
+      }
+      node = next;
+      if (!node || !node.getBoundingClientRect) continue;
+
+      var view = (node.ownerDocument && node.ownerDocument.defaultView) || window;
+      var style;
+      try { style = view.getComputedStyle(node); } catch (e) { continue; }
+      if (style && (style.display === 'none' || style.visibility === 'hidden')) return false;
+
+      var box = node.getBoundingClientRect();
+      if (box.width >= 2 && box.height >= 2) return true;
+    }
+    return false;
+  }
+
   function isVisible(el) {
     if (!el || !el.getBoundingClientRect) return false;
     if (el.disabled) return false;
 
-    // File inputs are almost always display:none behind a styled label, and
-    // they are the only way to attach a resume. Never filter them out — this
-    // check must precede every other visibility rule.
-    if (el.type === 'file') return true;
+    var tag = el.tagName ? el.tagName.toLowerCase() : '';
+    var type = (el.getAttribute && el.getAttribute('type') || '').toLowerCase();
+
+    // Never surface inputs the user could not interact with at all.
+    if (tag === 'input' && type === 'hidden') return false;
+
+    // File, radio and checkbox inputs are almost always visually replaced by a
+    // styled wrapper. They are the only clickable target, so keep them
+    // whenever anything above them is actually painted. This check must
+    // precede every other visibility rule.
+    if (type === 'file' || type === 'radio' || type === 'checkbox') {
+      return el.getBoundingClientRect().width >= 2 || hasVisibleAncestor(el);
+    }
 
     var view = (el.ownerDocument && el.ownerDocument.defaultView) || window;
     var style;
     try { style = view.getComputedStyle(el); } catch (e) { return false; }
     if (!style) return false;
     if (style.visibility === 'hidden' || style.display === 'none') return false;
-    if (parseFloat(style.opacity || '1') < 0.05) return false;
+
     var r = el.getBoundingClientRect();
-    if (r.width < 2 || r.height < 2) return false;
+
+    // A transparent or sr-only control still counts if its wrapper is painted.
+    if (parseFloat(style.opacity || '1') < 0.05 || r.width < 2 || r.height < 2) {
+      return hasVisibleAncestor(el);
+    }
+
     if (r.bottom < -view.innerHeight * 2) return false;
     if (r.top > view.innerHeight * 4) return false;
     return true;
@@ -235,15 +285,24 @@ export const DOM_READER_JS = String.raw`
     if (role === 'radio') return 'radio';
     if (role === 'link') return 'link';
     if (role === 'combobox' || role === 'listbox') return 'select';
-    if (role === 'textbox' || el.isContentEditable) return 'textarea';
+    if (role === 'textbox' || role === 'searchbox' || el.isContentEditable) return 'textarea';
+    if (role === 'option') return 'checkbox';
+    // Custom controls with no role still announce their state via ARIA.
+    if (el.hasAttribute && el.hasAttribute('aria-checked')) return 'checkbox';
     return 'button';
   }
 
   var SELECTOR = [
     'input', 'textarea', 'select', 'button', 'a[href]',
     '[role=button]', '[role=link]', '[role=checkbox]', '[role=switch]', '[role=radio]',
-    '[role=tab]', '[role=combobox]', '[role=listbox]', '[role=menuitem]', '[role=textbox]',
-    '[contenteditable=true]', '[onclick]'
+    '[role=radiogroup]', '[role=tab]', '[role=combobox]', '[role=listbox]', '[role=option]',
+    '[role=menuitem]', '[role=textbox]', '[role=searchbox]', '[role=spinbutton]',
+    '[contenteditable=true]', '[onclick]',
+    // Custom elements expose no standard tag or role, but a focusable one is
+    // still the control the user clicks — Google Careers renders its radio
+    // questions this way.
+    '[tabindex]:not([tabindex="-1"])',
+    '[aria-checked]', '[aria-selected]', '[data-value]'
   ].join(',');
 
   function tagAll() {
