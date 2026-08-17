@@ -40,6 +40,7 @@ export const DOM_READER_JS = String.raw`
   var counter = 0;
   var lastUrl = location.href;
   var blockedFrames = 0;
+  var blockedFrameUrls = [];
 
   function post(channel, payload) {
     try {
@@ -54,6 +55,33 @@ export const DOM_READER_JS = String.raw`
     }
   }
 
+  /* ------------------------------ popup capture ----------------------------- */
+
+  /**
+   * The WebView runs with multiple windows disabled, so window.open() is a
+   * silent no-op. Job boards overwhelmingly open their application form that
+   * way, which made "click Apply" look successful while nothing happened.
+   * Redirect popups into the current view instead, and neutralise target=_blank
+   * for the same reason.
+   */
+  function capturePopups() {
+    if (window.__agentPopupPatched) return;
+    window.__agentPopupPatched = true;
+
+    window.open = function (url) {
+      if (url) {
+        post('popup', { url: String(url) });
+        setTimeout(function () { location.href = url; }, 0);
+      }
+      return window;
+    };
+
+    document.addEventListener('click', function (event) {
+      var anchor = event.target && event.target.closest ? event.target.closest('a[target]') : null;
+      if (anchor && anchor.target && anchor.target !== '_self') anchor.target = '_self';
+    }, true);
+  }
+
   /* ------------------------------- root walking ------------------------------ */
 
   /**
@@ -63,6 +91,7 @@ export const DOM_READER_JS = String.raw`
    */
   function collectRoots() {
     blockedFrames = 0;
+    blockedFrameUrls = [];
     var roots = [];
 
     function walk(root, depth) {
@@ -85,8 +114,15 @@ export const DOM_READER_JS = String.raw`
         } catch (e) {
           doc = null;
         }
-        if (doc) walk(doc, depth + 1);
-        else blockedFrames++;
+        if (doc) {
+          walk(doc, depth + 1);
+        } else {
+          blockedFrames++;
+          // Report the src so the agent can open the embed as a top-level page,
+          // which turns an unreadable cross-origin form into a readable one.
+          var src = frames[j].src || frames[j].getAttribute('src');
+          if (src && blockedFrameUrls.indexOf(src) === -1) blockedFrameUrls.push(src);
+        }
       }
     }
 
@@ -284,6 +320,7 @@ export const DOM_READER_JS = String.raw`
       scrollY: window.scrollY,
       scrollHeight: document.documentElement.scrollHeight,
       blockedFrames: blockedFrames,
+      blockedFrameUrls: blockedFrameUrls.slice(0, 5),
       capturedAt: Date.now()
     };
   }
@@ -641,6 +678,7 @@ export const DOM_READER_JS = String.raw`
     }
   };
 
+  capturePopups();
   observeAll();
   watchUrl();
   post('ready', { url: location.href, title: document.title, version: VERSION });

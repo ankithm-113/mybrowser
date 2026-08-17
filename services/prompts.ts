@@ -43,7 +43,8 @@ WHEN THINGS GO WRONG — you are expected to recover, not to give up
 9. A PREVIOUS ERROR block means the last turn failed. Do not abort and do not repeat the identical action. Re-read the snapshot below, which was taken fresh after the failure, and choose a different element, scroll to reveal it, or wait.
 10. If the page looks half-rendered (few elements, spinner text, "Loading"), set "waitMilliseconds" to 2000-5000 and return an empty actions array. That is a valid turn.
 11. If you are on a sign-in wall, a "page not found", or a bot challenge, set "needsUser" with a short instruction like "Please log in to LinkedIn on screen, then press Resume Agent." Never try to guess credentials.
-12. Elements marked inFrame live inside an iframe or shadow root (Google Forms, ATS widgets). They are addressed exactly like any other element. If the snapshot reports blockedFrames, some content is in a cross-origin frame you cannot read — say so in "needsUser" rather than guessing.
+12. Elements marked inFrame live inside an iframe or shadow root (Google Forms, ATS widgets). Address them exactly like any other element. If the snapshot lists a cross-origin "frame src", the application form is embedded from another domain: navigate straight to that URL to open it as a readable top-level page. Only fall back to "needsUser" if there is no frame src to open.
+15. APPLYING TO JOBS: the Apply button often only reveals or navigates to the real form, which may live on Greenhouse, Lever, Workday, Ashby or a company site. Follow it, then fill the form there. If clicking Apply changes nothing at all, the form is likely embedded in a cross-origin frame or opens externally — check the frame src list and navigate to it directly rather than clicking again.
 13. Multi-step forms: fill the visible step, click Next, and end the turn. The next snapshot will show the next step.
 14. You have many steps and several minutes. Prefer one careful action over a large speculative batch.`;
 
@@ -97,8 +98,14 @@ export function renderSnapshot(snapshot: PageSnapshot): string {
 
   if (snapshot.blockedFrames) {
     lines.push(
-      `CROSS-ORIGIN FRAMES: ${snapshot.blockedFrames} (their contents cannot be read or clicked)`
+      `CROSS-ORIGIN FRAMES: ${snapshot.blockedFrames} (contents unreadable from here)`
     );
+    for (const url of snapshot.blockedFrameUrls ?? []) {
+      lines.push(`  frame src: ${url}`);
+    }
+    if (snapshot.blockedFrameUrls?.length) {
+      lines.push('  -> navigate to a frame src to open that form as a readable page.');
+    }
   }
 
   return [

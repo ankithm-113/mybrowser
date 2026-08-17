@@ -369,6 +369,18 @@ export async function runAgent(options: RunOptions): Promise<AgentRunResult> {
     logEntries.push(entry);
     onLog?.(entry);
 
+    // The whole point of this block: when a run "does nothing", these lines are
+    // what say which element it touched and what the page reported back.
+    log.info(`step ${step} @ ${snapshot.url}`);
+    log.info(`  thought: ${decision.thought}`);
+    for (const outcome of outcomes) {
+      const target = outcome.action?.targetAgentId ? ` ${outcome.action.targetAgentId}` : '';
+      const value = outcome.action?.value ? ` = "${String(outcome.action.value).slice(0, 40)}"` : '';
+      log.info(
+        `  ${outcome.ok ? 'OK  ' : 'FAIL'} ${outcome.action?.type}${target}${value}: ${outcome.detail}`
+      );
+    }
+
     history.push(`${decision.thought} -> ${actions.map(describeAction).join('; ')}`);
     lastResults = summariseOutcomes(outcomes);
     if (dropped.length) lastResults += `\nSkipped stale elements: ${dropped.join(', ')}`;
@@ -393,9 +405,30 @@ export async function runAgent(options: RunOptions): Promise<AgentRunResult> {
     }
 
     consecutiveFailures = 0;
+
     // The page already settled inside the executor; this short extra wait keeps
     // SPA route transitions from being read half-finished.
-    await executor.waitForStable(400, 6000);
+    const after = await executor.waitForStable(400, 6000);
+
+    /**
+     * A click that reports success but changes nothing is the signature of a
+     * swallowed popup, a disabled control, or a validation error the agent
+     * cannot see. Saying so beats letting it click the same button forever.
+     */
+    if (after && actions.some((a) => a.type === 'click')) {
+      const unchanged =
+        after.url === snapshot.url &&
+        after.elements.length === snapshot.elements.length &&
+        after.text.length === snapshot.text.length;
+
+      if (unchanged) {
+        previousError =
+          'Your click reported success but the page did not change: same URL, same elements, same text. ' +
+          'The control may be disabled, the form may have a validation error, or the target may open in a new window. ' +
+          'Do NOT click it again — scroll to check for an error message, try a different element, or navigate directly to the application URL.';
+        log.warn(`step ${step}: click produced no visible change at ${snapshot.url}`);
+      }
+    }
   }
 
   return finish(false, `Reached the ${maxSteps}-step limit without confirming completion.`, maxSteps);

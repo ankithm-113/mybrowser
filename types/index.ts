@@ -44,6 +44,8 @@ export interface PageSnapshot {
   scrollHeight: number;
   /** Cross-origin iframes the agent cannot read into. */
   blockedFrames?: number;
+  /** Their src URLs — navigating to one opens the embed as a readable page. */
+  blockedFrameUrls?: string[];
   capturedAt: number;
 }
 
