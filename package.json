@@ -6,7 +6,11 @@
     "start": "expo start",
     "android": "expo run:android",
     "ios": "expo run:ios",
-    "prebuild": "expo prebuild",
+    "prebuild": "expo prebuild && node scripts/postprebuild.js",
+    "prebuild:clean": "expo prebuild --clean && node scripts/postprebuild.js",
+    "icons": "node scripts/generate-icons.js",
+    "apk": "npm run prebuild:clean && cd android && gradlew.bat assembleRelease",
+    "install:usb": "adb install -r android/app/build/outputs/apk/release/app-release.apk",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
