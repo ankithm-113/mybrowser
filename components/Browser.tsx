@@ -75,7 +75,6 @@ const Browser = forwardRef<BrowserHandle, Props>(({ onRunFinished }, ref) => {
   ]);
   const [activeTabId, setActiveTabId] = useState('t1');
   const [addressText, setAddressText] = useState(HOME_URL);
-  const [currentUrl, setCurrentUrl] = useState(HOME_URL);
   const [canGoBack, setCanGoBack] = useState(false);
   const [canGoForward, setCanGoForward] = useState(false);
   const [showTabs, setShowTabs] = useState(false);
@@ -99,7 +98,6 @@ const Browser = forwardRef<BrowserHandle, Props>(({ onRunFinished }, ref) => {
     // SPA route changes fire no load event; the page reports them instead so
     // the address bar and the agent both see the new URL.
     executor.onUrlChange = (url: string) => {
-      setCurrentUrl(url);
       setAddressText(url);
     };
   }, []);
@@ -110,7 +108,6 @@ const Browser = forwardRef<BrowserHandle, Props>(({ onRunFinished }, ref) => {
 
   const handleNavigationStateChange = useCallback(
     (nav: WebViewNavigation) => {
-      setCurrentUrl(nav.url);
       setCanGoBack(nav.canGoBack);
       setCanGoForward(nav.canGoForward);
       if (!nav.loading) setAddressText(nav.url);
@@ -131,7 +128,6 @@ const Browser = forwardRef<BrowserHandle, Props>(({ onRunFinished }, ref) => {
     (raw: string) => {
       const url = normaliseUrl(raw);
       setAddressText(url);
-      setCurrentUrl(url);
       setTabs((prev) => prev.map((t) => (t.id === activeTabId ? { ...t, url } : t)));
     },
     [activeTabId]
@@ -416,10 +412,6 @@ const Browser = forwardRef<BrowserHandle, Props>(({ onRunFinished }, ref) => {
           onResume={pausedReason ? resume : undefined}
         />
       </View>
-
-      <Text style={styles.urlBar} numberOfLines={1}>
-        {currentUrl}
-      </Text>
     </KeyboardAvoidingView>
   );
 });
@@ -493,15 +485,4 @@ const styles = StyleSheet.create({
 
   webWrap: { flex: 1, backgroundColor: colors.bg },
   web: { flex: 1, backgroundColor: colors.bg },
-
-  urlBar: {
-    ...type.micro,
-    fontWeight: '400',
-    color: colors.textFaint,
-    paddingHorizontal: space.lg,
-    paddingVertical: 6,
-    backgroundColor: colors.surface,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-  },
 });
