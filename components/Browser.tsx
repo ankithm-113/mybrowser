@@ -21,7 +21,7 @@ import {
 import { WebView, WebViewNavigation } from 'react-native-webview';
 
 import { DOM_READER_JS } from '@/assets/dom_reader';
-import { AgentDecision, AgentRunResult, AgentStatus } from '@/types';
+import { AgentDecision, AgentRunLogEntry, AgentRunResult, AgentStatus } from '@/types';
 import { runAgent } from '@/services/agentLoop';
 import { confirm } from '@/services/dialog';
 import { executor } from '@/services/executor';
@@ -81,6 +81,7 @@ const Browser = forwardRef<BrowserHandle, Props>(({ onRunFinished }, ref) => {
   const [showTabs, setShowTabs] = useState(false);
   const [status, setStatus] = useState<AgentStatus>(IDLE_STATUS);
   const [lastThought, setLastThought] = useState<string>();
+  const [runLog, setRunLog] = useState<AgentRunLogEntry[]>([]);
   const [pausedReason, setPausedReason] = useState<string | null>(null);
   const resumeRef = useRef<((proceed: boolean) => void) | null>(null);
 
@@ -219,6 +220,7 @@ const Browser = forwardRef<BrowserHandle, Props>(({ onRunFinished }, ref) => {
       const controller = new AbortController();
       abortRef.current = controller;
       setLastThought(undefined);
+      setRunLog([]);
       setStatus({ phase: 'thinking', message: 'Starting agent...', step: 0, maxSteps: 0, task });
 
       let result: AgentRunResult;
@@ -228,7 +230,10 @@ const Browser = forwardRef<BrowserHandle, Props>(({ onRunFinished }, ref) => {
           executor,
           signal: controller.signal,
           onStatus: setStatus,
-          onLog: (entry) => setLastThought(entry.thought),
+          onLog: (entry) => {
+            setLastThought(entry.thought);
+            setRunLog((prev) => [...prev, entry]);
+          },
           confirmSubmit,
           awaitResume,
         });
@@ -407,6 +412,7 @@ const Browser = forwardRef<BrowserHandle, Props>(({ onRunFinished }, ref) => {
           status={status}
           onStop={stop}
           lastThought={lastThought}
+          runLog={runLog}
           onResume={pausedReason ? resume : undefined}
         />
       </View>
