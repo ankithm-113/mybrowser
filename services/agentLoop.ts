@@ -571,21 +571,71 @@ export async function runAgent(options: RunOptions): Promise<AgentRunResult> {
 
 export interface PlannedTask {
   task: string;
-  startUrl: string;
+  /** Undefined means "work on whatever is already open". */
+  startUrl?: string;
   needsConfirmation: boolean;
   note: string;
 }
 
-/** Turns a raw spoken/typed command into a task plus a starting URL. */
-export async function planTask(command: string): Promise<PlannedTask> {
+/**
+ * Commands that point at the page already on screen. "Fill this form" must
+ * never navigate — searching the web for the literal phrase both loses the
+ * form the user was looking at and guarantees the task fails.
+ */
+const REFERS_TO_CURRENT_PAGE =
+  /\b(this|these|current)\s+(form|page|site|website|application|survey|questionnaire|field|question|job|posting|listing|role|position|vacancy|article|product)s?\b|\bon (this|the current) (page|site|form)\b|\bhere\b|\bthis one\b/i;
+
+export interface PageContext {
+  url?: string;
+  title?: string;
+}
+
+/** Turns a raw spoken/typed command into a task plus, sometimes, a start URL. */
+export async function planTask(
+  command: string,
+  context?: PageContext
+): Promise<PlannedTask> {
   const vault = await loadVault();
-  const { value } = await completeJson<PlannedTask>([
+
+  const onRealPage =
+    !!context?.url &&
+    /^https?:\/\//.test(context.url) &&
+    !/^https?:\/\/(duckduckgo\.com\/?$|www\.google\.com\/?$)/.test(context.url);
+
+  // Decided here, not by the model: a deictic command plus a real open page is
+  // unambiguous, and getting it wrong destroys the user's context.
+  const mustUseCurrentPage = onRealPage && REFERS_TO_CURRENT_PAGE.test(command);
+
+  if (mustUseCurrentPage) {
+    log.info(`planTask: staying on the open page (${context!.url})`);
+    return {
+      task: `${command}\n\nWork on the page that is already open (${context!.title ?? context!.url}). Do not navigate away from it.`,
+      startUrl: undefined,
+      needsConfirmation: false,
+      note: 'Working on the page you already have open.',
+    };
+  }
+
+  const contextBlock = onRealPage
+    ? `\n\n## PAGE ALREADY OPEN\n${context!.title ?? ''}\n${context!.url}`
+    : '';
+
+  const { value } = await completeJson<PlannedTask & { useCurrentPage?: boolean }>([
     { role: 'system', content: TASK_PLANNER_SYSTEM_PROMPT },
     {
       role: 'user',
-      content: `${buildVaultContext(vault, { includeResume: false })}\n\n## COMMAND\n${command}`,
+      content: `${buildVaultContext(vault, { includeResume: false })}${contextBlock}\n\n## COMMAND\n${command}`,
     },
   ]);
+
+  if (value.useCurrentPage && onRealPage) {
+    return {
+      task: value.task || command,
+      startUrl: undefined,
+      needsConfirmation: !!value.needsConfirmation,
+      note: value.note ?? 'Working on the page you already have open.',
+    };
+  }
 
   return {
     task: value.task || command,

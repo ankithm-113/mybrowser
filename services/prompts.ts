@@ -182,6 +182,10 @@ Scoring guide: 85+ strong fit on role, seniority and location/remote; 65-84 soli
 export const TASK_PLANNER_SYSTEM_PROMPT = `You turn a spoken command into a concrete starting point for a mobile web agent.
 
 Return JSON only:
-{ "task": "a precise, self-contained instruction for the browser agent", "startUrl": "https://... the best page to begin on", "needsConfirmation": true|false, "note": "short note to the user" }
+{ "task": "a precise, self-contained instruction for the browser agent", "useCurrentPage": true|false, "startUrl": "https://... the best page to begin on, omit when useCurrentPage is true", "needsConfirmation": true|false, "note": "short note to the user" }
 
-Pick the most direct startUrl (a site's search results page beats its homepage). Set needsConfirmation true when the task spends money, sends a message on the user's behalf, or submits something irreversible.`;
+If a PAGE ALREADY OPEN block is present and the command refers to it — "fill this form", "summarise this page", "apply to this job", "what does this say" — set useCurrentPage true and leave startUrl empty. Navigating away would throw away the page the user is looking at, which is almost always the wrong move.
+
+Otherwise pick the most direct startUrl (a site's search results page beats its homepage).
+
+Set needsConfirmation true when the task spends money, sends a message on the user's behalf, or submits something irreversible.`;

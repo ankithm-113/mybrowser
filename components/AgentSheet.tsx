@@ -16,6 +16,7 @@ import {
 import { dispatch } from '@/services/agentBus';
 import { planTask } from '@/services/agentLoop';
 import { alert, confirm } from '@/services/dialog';
+import { executor } from '@/services/executor';
 import { isVoiceAvailable, startListening, VoiceSession } from '@/services/voice';
 import Glass from './Glass';
 import Icon from './Icon';
@@ -70,14 +71,19 @@ export default function AgentSheet({ visible, onClose, onNavigateToAgent }: Prop
 
       setPlanning(true);
       try {
-        const plan = await planTask(text);
+        // What the user is looking at right now, so "fill this form" resolves
+        // to the open page instead of a web search for those words.
+        const open = executor.latestSnapshot;
+        const plan = await planTask(text, { url: open?.url, title: open?.title });
         setPlanning(false);
 
         if (plan.needsConfirmation) {
           const approved = await confirm({
             title: 'Confirm this task',
             message:
-              `${plan.task}\n\nStarting at: ${plan.startUrl}\n\n` +
+              `${plan.task}\n\n${
+                plan.startUrl ? `Starting at: ${plan.startUrl}` : 'On the page you have open'
+              }\n\n` +
               'This task may spend money or send something on your behalf.',
             confirmLabel: 'Run it',
           });
