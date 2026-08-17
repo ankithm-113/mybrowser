@@ -7,8 +7,10 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  useWindowDimensions,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AgentRunLogEntry, AgentStatus } from '@/types';
 import Glass from './Glass';
@@ -39,6 +41,20 @@ export default function AgentOverlay({ status, onStop, lastThought, runLog, onRe
   const slide = useRef(new Animated.Value(0)).current;
   const [expanded, setExpanded] = useState(false);
   const visible = status.phase !== 'idle';
+
+  /**
+   * The card is anchored to the bottom and grows upward, so without a ceiling
+   * a long transcript runs off the top of the screen. Cap it against the real
+   * viewport, leaving the address bar and the safe area clear.
+   */
+  const { height: windowHeight } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  const maxCardHeight = Math.max(
+    200,
+    Math.min(windowHeight * 0.62, windowHeight - insets.top - insets.bottom - 150)
+  );
+  /** Chrome around the transcript: header, buttons, progress bar, meta line. */
+  const transcriptMaxHeight = Math.max(110, maxCardHeight - (onResume ? 250 : 190));
 
   useEffect(() => {
     Animated.spring(slide, {
@@ -75,6 +91,7 @@ export default function AgentOverlay({ status, onStop, lastThought, runLog, onRe
         style={[
           styles.cardShadow,
           {
+            maxHeight: maxCardHeight,
             opacity: slide,
             transform: [
               { translateY: slide.interpolate({ inputRange: [0, 1], outputRange: [24, 0] }) },
@@ -97,11 +114,10 @@ export default function AgentOverlay({ status, onStop, lastThought, runLog, onRe
             )}
 
             <Pressable style={styles.messagePress} onPress={hasMore ? toggle : undefined}>
-              <Text
-                style={styles.message}
-                numberOfLines={expanded ? undefined : 2}
-                selectable={expanded}
-              >
+              {/* Collapsed shows two lines; expanded keeps one as a title and
+                  moves the full text into the scroll area below, so a long
+                  reply can never push the card past its ceiling. */}
+              <Text style={styles.message} numberOfLines={expanded ? 1 : 2}>
                 {status.message}
               </Text>
             </Pressable>
@@ -117,14 +133,19 @@ export default function AgentOverlay({ status, onStop, lastThought, runLog, onRe
 
           {expanded ? (
             <ScrollView
-              style={styles.transcript}
+              style={[styles.transcript, { maxHeight: transcriptMaxHeight }]}
               contentContainerStyle={styles.transcriptContent}
               showsVerticalScrollIndicator
               nestedScrollEnabled
             >
+              <Text style={styles.sectionLabel}>{finished ? 'Reply' : 'Status'}</Text>
+              <Text style={styles.body} selectable>
+                {status.message}
+              </Text>
+
               {!!lastThought && (
                 <>
-                  <Text style={styles.sectionLabel}>Current thinking</Text>
+                  <Text style={[styles.sectionLabel, styles.sectionSpaced]}>Current thinking</Text>
                   <Text style={styles.body} selectable>
                     {lastThought}
                   </Text>
@@ -197,8 +218,8 @@ export default function AgentOverlay({ status, onStop, lastThought, runLog, onRe
 
 const styles = StyleSheet.create({
   wrap: { position: 'absolute', left: space.md, right: space.md, bottom: space.lg },
-  cardShadow: { borderRadius: radius.lg, ...elevation.raised },
-  card: { padding: space.lg },
+  cardShadow: { borderRadius: radius.lg, flexShrink: 1, ...elevation.raised },
+  card: { padding: space.lg, flexShrink: 1 },
   headerRow: { flexDirection: 'row', alignItems: 'flex-start', gap: space.md },
   statusDot: {
     width: 20,
@@ -213,8 +234,8 @@ const styles = StyleSheet.create({
   message: { ...type.bodyStrong, color: colors.text, lineHeight: 20 },
   thought: { ...type.small, color: colors.textDim, marginTop: space.md, lineHeight: 18 },
 
-  /** Capped so the card can never swallow the whole browser viewport. */
-  transcript: { maxHeight: 260, marginTop: space.md },
+  /** Height is set at runtime from the viewport; see transcriptMaxHeight. */
+  transcript: { flexShrink: 1, marginTop: space.md },
   transcriptContent: { paddingBottom: space.sm },
   sectionLabel: {
     ...type.label,
